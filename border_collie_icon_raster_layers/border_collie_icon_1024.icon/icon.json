@@ -1,0 +1,65 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : "automatic"
+    },
+    {
+      "appearance" : "dark",
+      "value" : "system-dark"
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "02_white_muzzle.png",
+          "name" : "02_white_muzzle",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ]
+        },
+        {
+          "image-name" : "03_black_face_solid_ears.png",
+          "name" : "03_black_face_solid_ears",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 0.8
+            }
+          ]
+        },
+        {
+          "image-name" : "04_white_beard.png",
+          "name" : "04_white_beard",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 0.7
+            }
+          ]
+        },
+        {
+          "image-name" : "01_front_eyes_nose.png",
+          "name" : "01_front_eyes_nose"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

@@ -2,7 +2,7 @@
 
 This document describes the design of BorderCollie's usage tracking feature and
 the standards future trackers should follow. The current implementation tracks
-Codex and Cursor usage. Future trackers, such as Claude Code, should preserve
+Codex, Cursor, and Claude Code usage. Future trackers should preserve
 the same user experience and normalized quota model while isolating each agent's
 credential and API details.
 
@@ -38,18 +38,24 @@ The current Codex screen defines the product standard for future trackers:
 - The updated timestamp is static for a given query result. It updates only when
   a refresh succeeds or fails with a new `queriedAt` value.
 - Manual refresh lives in the top toolbar, not inside the content card.
-- Auto refresh runs every 30 seconds.
+- Auto refresh runs every 30 seconds by default.
+- Claude Code auto refresh uses a 60-second cadence because its OAuth usage
+  endpoint rate-limits more aggressive polling.
 - Xcode previews must not run live credential or network queries.
 
 The menu-bar companion follows the same usage semantics in a compact format:
 
 - The menu-bar item is a SwiftUI `MenuBarExtra` with `.window` style.
-- The regular Dock/window app remains the primary app mode.
+- Closing the main window keeps the process alive as a menu-bar companion and
+  hides the Dock icon until **Show Window** or a Dock reopen restores it.
 - The popup queries on open and refreshes every 30 seconds while visible.
+- Claude Code network calls inside that loop are gated to about once every
+  60 seconds and back off for at least five minutes after HTTP 429.
 - A compact row is shown for each tracked agent, ordered `Codex`, then
-  `Cursor`.
+  `Cursor`, then `Claude Code`.
 - Codex compact format: `5h: 80% | 7d: 90%`.
 - Cursor compact format: `Auto: 95% | API: 60%`.
+- Claude Code compact format: `5h: 52% | 7d: 36%`.
 - Compact percentages are usage remaining, rounded to whole percentages.
 - Missing compact tiers show `--`.
 - Detailed menu-bar UI and row-state rules live in
@@ -60,6 +66,11 @@ The current Codex UI is implemented primarily in:
 - `BorderCollie/ContentView.swift`
 - `BorderCollie/CodexUsageView.swift`
 - `BorderCollie/CodexUsageDisplay.swift`
+
+Claude Code follows the same UI pattern via:
+
+- `BorderCollie/ClaudeUsageView.swift`
+- `BorderCollie/ClaudeUsageDisplay.swift`
 
 ## Architecture Overview
 
@@ -105,7 +116,7 @@ are initially provider-specific.
 
 The shared normalized model lives in `CodexUsageModels.swift` today. Some names
 remain Codex-oriented from the first tracker, but the shapes are shared by
-Codex and Cursor.
+Codex, Cursor, and Claude Code.
 
 ### `CredentialStatus`
 
@@ -280,6 +291,85 @@ Refresh behavior is split between the view and view model:
 
 This combination prevents the old "query runs forever" failure mode while still
 making the feature automatic for normal use.
+
+- Claude Code uses a 60-second page auto-refresh interval and a shared
+  request gate so menu-bar 30-second ticks do not create a network call every
+  cycle.
+
+## Current Claude Code Implementation
+
+### Credential Resolution
+
+Claude Code credential lookup is implemented in `ClaudeCredentialResolver`.
+
+Current lookup order:
+
+1. macOS Keychain generic password named `Claude Code-credentials`.
+2. `~/.claude/.credentials.json`, or `$CLAUDE_CONFIG_DIR/.credentials.json` when
+   set.
+
+Current safety rules:
+
+- Keychain lookup uses `/usr/bin/security`.
+- Keychain lookup has a 2-second timeout.
+- Tokens are parsed and retained only in service/client layers.
+- Tokens are never passed to SwiftUI views.
+- Missing `claudeAiOauth` is treated as `notFound`.
+- Missing or empty access tokens are treated as `parseError`.
+- Tokens past `expiresAt` are marked `expired`, but the service may still try a
+  remote query before showing an expired-token error.
+
+### Remote Query
+
+Claude Code usage is fetched by `ClaudeUsageClient`.
+
+Current endpoint:
+
+```text
+https://api.anthropic.com/api/oauth/usage
+```
+
+Current request behavior:
+
+- Method: `GET`
+- Timeout: 15 seconds.
+- Headers:
+  - `Authorization: Bearer <access_token>`
+  - `Accept: application/json`
+  - `Content-Type: application/json`
+  - `User-Agent: claude-code/2.1.220`
+  - `anthropic-beta: oauth-2025-04-20`
+
+Current response mapping:
+
+- `five_hour` becomes `five_hour`.
+- `seven_day` becomes `seven_day`.
+- `utilization` maps directly to `QuotaTier.utilization`.
+- `resets_at` is normalized to ISO 8601 without fractional seconds when parsing
+  succeeds.
+
+Known Claude Code windows:
+
+| Tier name | UI label |
+| --- | --- |
+| `five_hour` | `5h` |
+| `seven_day` | `Weekly` |
+
+The compact menu-bar labels are `5h` and `7d`.
+
+
+### Refresh And Rate Limiting
+
+Claude Code is the exception to the default 30-second product cadence:
+
+- The Claude Code detail page auto-refreshes every 60 seconds.
+- `ClaudeUsageRequestGate` shares one process-wide cache/cooldown across the
+  detail page and menu-bar popup.
+- Successful quota responses are reused for at least 60 seconds.
+- HTTP 429 starts a cooldown of at least 300 seconds. A positive `Retry-After`
+  header may extend that cooldown; `Retry-After: 0` is ignored.
+- While rate-limited, the gate prefers the last successful quota over a hard
+  error so the UI does not flap.
 
 ## Reusable Parts
 

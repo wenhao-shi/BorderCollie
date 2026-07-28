@@ -9,8 +9,10 @@ import SwiftUI
 
 @main
 struct BorderCollieApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        WindowGroup {
+        Window("BorderCollie", id: AppDelegate.mainWindowID) {
             ContentView()
         }
 

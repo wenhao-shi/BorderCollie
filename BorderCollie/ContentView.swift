@@ -17,6 +17,8 @@ struct ContentView: View {
                     .tag(SidebarSection.codex)
                 Label("Cursor", systemImage: "cursorarrow.rays")
                     .tag(SidebarSection.cursor)
+                Label("Claude Code", systemImage: "sparkles")
+                    .tag(SidebarSection.claudeCode)
             }
             .listStyle(.sidebar)
             .navigationTitle("BorderCollie")
@@ -26,6 +28,8 @@ struct ContentView: View {
                 CodexUsageView()
             case .cursor:
                 CursorUsageView()
+            case .claudeCode:
+                ClaudeUsageView()
             }
         }
     }
@@ -34,6 +38,7 @@ struct ContentView: View {
 private enum SidebarSection: String, Identifiable {
     case codex
     case cursor
+    case claudeCode
 
     var id: String { rawValue }
 }

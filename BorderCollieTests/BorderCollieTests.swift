@@ -135,6 +135,7 @@ struct BorderCollieTests {
 
         #expect(CodexUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
         #expect(CursorUsageLimitDisplay.compactSummary(from: cursorQuota) == "Auto: 100% | API: 0%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
     }
 
     @Test func credentialParserRejectsNonChatGPTOAuthMode() {
@@ -348,8 +349,241 @@ struct BorderCollieTests {
         #expect(quota == .notFound(tool: "cursor"))
     }
 
+
+    @Test func claudeCompactSummaryShowsRemainingUsage() {
+        let quota = SubscriptionQuota(
+            tool: "claude_code",
+            credentialStatus: .valid,
+            credentialMessage: nil,
+            success: true,
+            tiers: [
+                QuotaTier(name: "five_hour", utilization: 48, resetsAt: nil),
+                QuotaTier(name: "seven_day", utilization: 64, resetsAt: nil),
+            ],
+            extraUsage: nil,
+            error: nil,
+            queriedAt: nil
+        )
+
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 52% | 7d: 36%")
+    }
+
+    @Test func claudeCredentialParserReadsValidOAuthToken() {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            """
+            {
+              "claudeAiOauth": {
+                "accessToken": "sk-ant-oat01-test",
+                "expiresAt": 1785200000000
+              }
+            }
+            """,
+            now: now
+        )
+
+        #expect(credentials.status == .valid)
+        #expect(credentials.accessToken == "sk-ant-oat01-test")
+    }
+
+    @Test func claudeCredentialParserPreservesExpiredTokenForOptimisticRemoteAttempt() {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T16:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            """
+            {
+              "claudeAiOauth": {
+                "accessToken": "sk-ant-oat01-expired",
+                "expiresAt": 1785166162351
+              }
+            }
+            """,
+            now: now
+        )
+
+        #expect(credentials.status == .expired)
+        #expect(credentials.accessToken == "sk-ant-oat01-expired")
+        #expect(credentials.message == "Claude Code OAuth token has expired")
+    }
+
+    @Test func claudeCredentialParserReportsMissingOAuthAsNotFound() {
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            """
+            {
+              "other": true
+            }
+            """
+        )
+
+        #expect(credentials.status == .notFound)
+        #expect(credentials.accessToken == nil)
+    }
+
+    @Test func claudeUsageClientNormalizesOAuthUsageResponse() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": {
+                "utilization": 48.0,
+                "resets_at": "2026-07-27T17:00:00.521744+00:00"
+              },
+              "seven_day": {
+                "utilization": 64.0,
+                "resets_at": "2026-08-01T06:00:00.521764+00:00"
+              },
+              "seven_day_opus": null,
+              "extra_usage": {
+                "is_enabled": false,
+                "monthly_limit": null,
+                "used_credits": 0,
+                "utilization": null
+              }
+            }
+            """
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(quota.success)
+        #expect(quota.credentialStatus == .valid)
+        #expect(quota.queriedAt == 1_785_153_600_000)
+        #expect(quota.tiers == [
+            QuotaTier(name: "five_hour", utilization: 48.0, resetsAt: "2026-07-27T17:00:00Z"),
+            QuotaTier(name: "seven_day", utilization: 64.0, resetsAt: "2026-08-01T06:00:00Z"),
+        ])
+
+        let request = await httpClient.lastRequest()
+        #expect(request?.value(forHTTPHeaderField: "Authorization") == "Bearer claude-secret")
+        #expect(request?.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
+        #expect(request?.value(forHTTPHeaderField: "Accept") == "application/json")
+        #expect(request?.timeoutInterval == 15)
+    }
+
+    @Test func claudeUsageClientMapsUnauthorizedResponseToExpiredCredentials() async {
+        let httpClient = CapturingHTTPClient(statusCode: 401, body: "{}")
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate()
+        )
+
+        let quota = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(!quota.success)
+        #expect(quota.credentialStatus == .expired)
+        #expect(quota.error == "Authentication failed. Please sign in with Claude Code again. (HTTP 401)")
+    }
+
+    @Test func claudeUsageClientServesCachedQuotaInsideMinimumRefreshInterval() async {
+        let start = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let clock = ClaudeTestClock(start)
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": { "utilization": 10.0, "resets_at": "2026-07-27T17:00:00Z" },
+              "seven_day": { "utilization": 20.0, "resets_at": "2026-08-01T06:00:00Z" }
+            }
+            """
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            now: { clock.now() }
+        )
+
+        let first = await client.queryClaudeQuota(accessToken: "claude-secret")
+        clock.advance(seconds: 30)
+        let second = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(first.success)
+        #expect(second == first)
+        #expect(await httpClient.requestCount() == 1)
+    }
+
+    @Test func claudeUsageClientBacksOffOnRateLimitAndPreservesLastSuccess() async {
+        let start = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let clock = ClaudeTestClock(start)
+        let successClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": { "utilization": 10.0, "resets_at": "2026-07-27T17:00:00Z" },
+              "seven_day": { "utilization": 20.0, "resets_at": "2026-08-01T06:00:00Z" }
+            }
+            """
+        )
+        let gate = ClaudeUsageRequestGate()
+        let successQuery = ClaudeUsageClient(
+            httpClient: successClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: gate,
+            now: { clock.now() }
+        )
+        let first = await successQuery.queryClaudeQuota(accessToken: "claude-secret")
+
+        clock.advance(seconds: ClaudeUsageRequestGate.minimumRefreshInterval)
+        let limitedClient = CapturingHTTPClient(
+            statusCode: 429,
+            body: #"{"error":{"type":"rate_limit_error","message":"Rate limited"}}"#,
+            headerFields: ["Retry-After": "0"]
+        )
+        let limitedQuery = ClaudeUsageClient(
+            httpClient: limitedClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: gate,
+            now: { clock.now() }
+        )
+        let second = await limitedQuery.queryClaudeQuota(accessToken: "claude-secret")
+        let third = await limitedQuery.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(first.success)
+        #expect(second == first)
+        #expect(third == first)
+        #expect(await limitedClient.requestCount() == 1)
+    }
+
+    @Test func claudeUsageRequestGateIgnoresZeroRetryAfterHeader() {
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.test/oauth/usage")!,
+            statusCode: 429,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Retry-After": "0"]
+        )!
+
+        #expect(ClaudeUsageRequestGate.retryAfterSeconds(from: response) == nil)
+    }
+
+    @Test func claudeQuotaServiceMapsMissingCredentials() async {
+        let service = ClaudeQuotaService(
+            credentialResolver: StubClaudeCredentialResolver(
+                credentials: ClaudeCredentials(accessToken: nil, status: .notFound, message: nil)
+            ),
+            usageClient: ClaudeUsageClient(
+                httpClient: CapturingHTTPClient(statusCode: 500, body: "{}"),
+                requestGate: ClaudeUsageRequestGate()
+            )
+        )
+
+        let quota = await service.getSubscriptionQuota()
+
+        #expect(quota == .notFound(tool: "claude_code"))
+    }
+
     @MainActor
     @Test func menuBarViewModelRefreshesAgentsConcurrentlyInFixedOrder() async {
+
         let probe = RefreshConcurrencyProbe()
         let codexService = StubUsageTrackingService(
             toolID: "codex",
@@ -381,19 +615,41 @@ struct BorderCollieTests {
                 await probe.leave()
             }
         )
+        let claudeService = StubUsageTrackingService(
+            toolID: "claude_code",
+            quota: SubscriptionQuota(
+                tool: "claude_code",
+                credentialStatus: .valid,
+                credentialMessage: nil,
+                success: true,
+                tiers: [
+                    QuotaTier(name: "five_hour", utilization: 48, resetsAt: nil),
+                    QuotaTier(name: "seven_day", utilization: 64, resetsAt: nil),
+                ],
+                extraUsage: nil,
+                error: nil,
+                queriedAt: nil
+            ),
+            onQuery: {
+                await probe.enter()
+                try? await Task.sleep(for: .milliseconds(50))
+                await probe.leave()
+            }
+        )
         let viewModel = MenuBarUsageViewModel(
             agents: [
                 .codex(service: codexService),
                 .cursor(service: cursorService),
+                .claudeCode(service: claudeService),
             ]
         )
 
         await viewModel.refresh()
 
-        #expect(await probe.maxRunningCount() == 2)
-        #expect(viewModel.rows.map(\.title) == ["Codex", "Cursor"])
-        #expect(viewModel.rows.map(\.detail) == ["5h: 80% | 7d: 90%", "Sign in required"])
-        #expect(viewModel.rows.map(\.state) == [.success, .unavailable])
+        #expect(await probe.maxRunningCount() == 3)
+        #expect(viewModel.rows.map(\.title) == ["Codex", "Cursor", "Claude Code"])
+        #expect(viewModel.rows.map(\.detail) == ["5h: 80% | 7d: 90%", "Sign in required", "5h: 52% | 7d: 36%"])
+        #expect(viewModel.rows.map(\.state) == [.success, .unavailable, .success])
     }
 
     @MainActor
@@ -475,14 +731,37 @@ struct BorderCollieTests {
     }
 }
 
+private final class ClaudeTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    init(_ current: Date) {
+        self.current = current
+    }
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        current = current.addingTimeInterval(seconds)
+    }
+}
+
 private actor CapturingHTTPClient: CodexUsageHTTPClient {
     private var requests: [URLRequest] = []
     private let statusCode: Int
     private let body: String
+    private let headerFields: [String: String]?
 
-    init(statusCode: Int, body: String) {
+    init(statusCode: Int, body: String, headerFields: [String: String]? = nil) {
         self.statusCode = statusCode
         self.body = body
+        self.headerFields = headerFields
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
@@ -491,7 +770,7 @@ private actor CapturingHTTPClient: CodexUsageHTTPClient {
             url: request.url!,
             statusCode: statusCode,
             httpVersion: "HTTP/1.1",
-            headerFields: nil
+            headerFields: headerFields
         )!
         return (Data(body.utf8), response)
     }
@@ -499,12 +778,24 @@ private actor CapturingHTTPClient: CodexUsageHTTPClient {
     func lastRequest() -> URLRequest? {
         requests.last
     }
+
+    func requestCount() -> Int {
+        requests.count
+    }
 }
 
 private struct StubCursorCredentialResolver: CursorCredentialResolving {
     let credentials: CursorCredentials
 
     func readCursorCredentials() -> CursorCredentials {
+        credentials
+    }
+}
+
+private struct StubClaudeCredentialResolver: ClaudeCredentialResolving {
+    let credentials: ClaudeCredentials
+
+    func readClaudeCredentials() -> ClaudeCredentials {
         credentials
     }
 }

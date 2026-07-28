@@ -16,6 +16,7 @@
 ## Repository Layout
 
 - `BorderCollie/BorderCollieApp.swift`: app entry point.
+- `BorderCollie/AppDelegate.swift`: keep-alive + Dock/menu-bar activation policy.
 - `BorderCollie/ContentView.swift`: root sidebar/detail navigation.
 - `BorderCollie/AgentUsageMenuBarView.swift`: menu-bar usage popup UI.
 - `BorderCollie/MenuBarUsageViewModel.swift`: menu-bar refresh orchestration,
@@ -42,11 +43,21 @@
   discovery from Cursor's local `state.vscdb`.
 - `BorderCollie/CursorUsageClient.swift`: Cursor current-period usage client
   and response normalization.
+- `BorderCollie/ClaudeUsageView.swift`: Claude Code-specific tracker wrapper.
+- `BorderCollie/ClaudeQuotaService.swift`: coordinates Claude Code credentials
+  and quota client.
+- `BorderCollie/ClaudeCredentialResolver.swift`: Claude Code OAuth credential
+  discovery from Keychain and `~/.claude/.credentials.json`.
+- `BorderCollie/ClaudeUsageRequestGate.swift`: shared Claude usage cache and 429 cooldown.
+- `BorderCollie/ClaudeUsageClient.swift`: Claude Code OAuth usage client and
+  response normalization.
 - `BorderCollie/CodexUsageModels.swift`: normalized quota models and shared
   formatting helpers.
 - `BorderCollie/CodexUsageDisplay.swift`: display-policy helpers for usage
   rows.
 - `BorderCollie/CursorUsageDisplay.swift`: Cursor monthly usage row labels.
+- `BorderCollie/ClaudeUsageDisplay.swift`: Claude Code session/weekly usage
+  row labels.
 - `docs/tracker_design.md`: design guide for adding future usage trackers.
 - `docs/menubar-item-design.me`: design contract for the menu-bar companion
   surface.
@@ -66,12 +77,15 @@ are prepared for the app UI to launch.
 
 - Query automatically when a tracker page opens.
 - Query automatically when the menu-bar usage popup opens.
-- Refresh automatically every 30 seconds.
+- Closing the main window keeps the gauge menu-bar item alive and hides the Dock icon.
+- Refresh automatically every 30 seconds by default; Claude Code uses
+  a 60-second cadence plus a shared 429/cache gate.
 - Keep manual Refresh in the top toolbar.
 - Keep manual refresh in the menu-bar popup as an icon-only button.
 - Show `Usage remaining`, not usage consumed.
 - The menu-bar popup shows all tracked agents in compact remaining format:
-  `Codex 5h: 80% | 7d: 90%` and `Cursor Auto: 95% | API: 60%`.
+  `Codex 5h: 80% | 7d: 90%`, `Cursor Auto: 95% | API: 60%`, and
+  `Claude Code 5h: 52% | 7d: 36%`.
 - Use native SwiftUI `ProgressView` bars.
 - Keep updated time static until the next refresh.
 - Do not show auth implementation details in the happy path.
@@ -109,6 +123,17 @@ are prepared for the app UI to launch.
 - Prevention: prefer `PreviewProvider` in this project until the macro-server
   environment is known to be stable.
 
+
+### Symptom: Claude Code tracker returns HTTP 429 after frequent refresh
+
+- Root cause: Anthropic's `/api/oauth/usage` endpoint rate-limits aggressive
+  polling; BorderCollie's default 30-second cadence is too fast for Claude.
+- Fix: keep Claude page auto-refresh at 60 seconds and let
+  `ClaudeUsageRequestGate` cache successes and cool down for at least
+  300 seconds after 429.
+- Prevention: do not poll the Claude OAuth usage endpoint more often than
+  about once every 60 seconds across the app window and menu bar.
+
 ### Symptom: usage percentage appears inverted
 
 - Root cause: provider API reports used percentage while the UI displays
@@ -129,8 +154,9 @@ are prepared for the app UI to launch.
 - Root cause: sandbox restrictions block user auth files, local Cursor state,
   Keychain/sqlite subprocesses, or network access.
 - Fix: keep sandbox disabled or add an explicit entitlement strategy.
-- Prevention: retest Keychain, `~/.codex/auth.json`, Cursor `state.vscdb`, and
-  remote usage calls when changing signing or sandbox settings.
+- Prevention: retest Keychain, `~/.codex/auth.json`, Cursor `state.vscdb`,
+  Claude Code Keychain/`~/.claude/.credentials.json`, and remote usage calls
+  when changing signing or sandbox settings.
 
 ### Symptom: Cursor tracker shows missing credentials while Cursor is signed in
 
@@ -164,6 +190,18 @@ are prepared for the app UI to launch.
 - Alternatives considered: user-selectable 5s, 30s, or 1m cadence.
 - Rationale: a fixed cadence keeps the UI simpler and avoids unnecessary
   provider polling choices.
+
+
+### Decision: Claude Code uses a slower refresh and shared request gate
+
+- Context: Claude Code's OAuth usage endpoint returns HTTP 429 under the
+  shared 30-second auto-refresh cadence.
+- Alternatives considered: keep a 300-second page cadence, slow every tracker,
+  or keep 30 seconds and surface 429 errors.
+- Rationale: Codex and Cursor tolerate 30-second polling; Claude uses a
+  60-second page cadence plus a process-wide cache and ≥300-second 429
+  cooldown so the menu-bar loop does not burn the token budget.
+
 
 ### Decision: manual refresh belongs in the toolbar
 
@@ -224,10 +262,22 @@ are prepared for the app UI to launch.
   with no extra setup; the Admin API is better for teams but not the least
   friction path for this app.
 
+
+### Decision: Claude Code uses Claude.ai OAuth usage
+
+- Context: Claude Code stores Claude.ai OAuth credentials in the macOS Keychain
+  item `Claude Code-credentials` (with `~/.claude/.credentials.json` as a
+  fallback), and Anthropic exposes session/weekly utilization through
+  `GET /api/oauth/usage`.
+- Alternatives considered: scrape claude.ai cookies/session keys, parse local
+  JSONL session logs, or require an Anthropic Console Admin API key.
+- Rationale: the Claude Code OAuth token plus `/api/oauth/usage` matches the
+  personal Pro/Max rate-limit windows with no extra setup and reuses the same
+  remaining-percentage UX as Codex.
+
 ## Future Tracker Guidance
 
-Read `docs/tracker_design.md` before adding another tracker such as Claude
-Code.
+Read `docs/tracker_design.md` before adding another tracker.
 
 Read `docs/menubar-item-design.me` before changing the menu-bar companion UI or
 adding another tracker row there.

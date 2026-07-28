@@ -37,6 +37,15 @@ struct MenuBarUsageAgent: Identifiable, Sendable {
             compactSummary: CursorUsageLimitDisplay.compactSummary
         )
     }
+
+    static func claudeCode(service: any UsageTrackingService = ClaudeQuotaService.live) -> MenuBarUsageAgent {
+        MenuBarUsageAgent(
+            id: "claude_code",
+            title: "Claude Code",
+            service: service,
+            compactSummary: ClaudeUsageLimitDisplay.compactSummary
+        )
+    }
 }
 
 @MainActor
@@ -50,6 +59,7 @@ final class MenuBarUsageViewModel: ObservableObject {
         agents: [MenuBarUsageAgent] = [
             .codex(),
             .cursor(),
+            .claudeCode(),
         ],
         initialRows: [MenuBarUsageRow]? = nil
     ) {
@@ -157,10 +167,12 @@ extension MenuBarUsageViewModel {
             agents: [
                 .codex(service: StaticUsageTrackingService(toolID: "codex", quota: .previewMenuBarCodexUsage)),
                 .cursor(service: StaticUsageTrackingService(toolID: "cursor", quota: .previewMenuBarCursorUsage)),
+                .claudeCode(service: StaticUsageTrackingService(toolID: "claude_code", quota: .previewMenuBarClaudeUsage)),
             ],
             initialRows: [
                 MenuBarUsageRow(id: "codex", title: "Codex", detail: "5h: 80% | 7d: 90%", state: .success),
                 MenuBarUsageRow(id: "cursor", title: "Cursor", detail: "Auto: 95% | API: 60%", state: .success),
+                MenuBarUsageRow(id: "claude_code", title: "Claude Code", detail: "5h: 52% | 7d: 36%", state: .success),
             ]
         )
     }
@@ -192,6 +204,22 @@ private extension SubscriptionQuota {
             tiers: [
                 QuotaTier(name: CursorUsageLimitKind.autoComposer.rawValue, utilization: 5, resetsAt: "2026-07-30T03:12:17Z"),
                 QuotaTier(name: CursorUsageLimitKind.api.rawValue, utilization: 40, resetsAt: "2026-07-30T03:12:17Z"),
+            ],
+            extraUsage: nil,
+            error: nil,
+            queriedAt: Date().millisecondsSince1970
+        )
+    }
+
+    static var previewMenuBarClaudeUsage: SubscriptionQuota {
+        SubscriptionQuota(
+            tool: "claude_code",
+            credentialStatus: .valid,
+            credentialMessage: nil,
+            success: true,
+            tiers: [
+                QuotaTier(name: ClaudeUsageLimitKind.fiveHour.rawValue, utilization: 48, resetsAt: "2026-07-27T20:00:00Z"),
+                QuotaTier(name: ClaudeUsageLimitKind.week.rawValue, utilization: 64, resetsAt: "2026-08-01T06:00:00Z"),
             ],
             extraUsage: nil,
             error: nil,

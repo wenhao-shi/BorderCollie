@@ -1,6 +1,8 @@
+import AppKit
 import SwiftUI
 
 struct AgentUsageMenuBarView: View {
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var viewModel: MenuBarUsageViewModel
 
     private let runsAutoRefresh: Bool
@@ -20,11 +22,18 @@ struct AgentUsageMenuBarView: View {
                     usageRow(row)
                 }
             }
+
+            Divider()
+
+            footerActions
         }
         .padding(14)
         .frame(width: 320, alignment: .topLeading)
         .task {
             await runAutoRefreshLoop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .borderCollieShowMainWindow)) { _ in
+            showMainWindow()
         }
     }
 
@@ -56,6 +65,21 @@ struct AgentUsageMenuBarView: View {
         .help("Refresh")
     }
 
+    private var footerActions: some View {
+        VStack(spacing: 2) {
+            Button("Show Window") {
+                showMainWindow()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button("Quit BorderCollie") {
+                BorderCollieAppActivation.quit()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.borderless)
+    }
+
     private func usageRow(_ row: MenuBarUsageRow) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(row.title)
@@ -72,6 +96,19 @@ struct AgentUsageMenuBarView: View {
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    @MainActor
+    private func showMainWindow() {
+        BorderCollieAppActivation.revealDockIcon()
+        openWindow(id: AppDelegate.mainWindowID)
+
+        DispatchQueue.main.async {
+            if let window = NSApp.windows.first(where: Self.isMainWindow) {
+                window.makeKeyAndOrderFront(nil)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     @MainActor
@@ -106,6 +143,13 @@ struct AgentUsageMenuBarView: View {
         case .unavailable:
             AnyShapeStyle(Color.orange)
         }
+    }
+
+    private static func isMainWindow(_ window: NSWindow) -> Bool {
+        if window.identifier?.rawValue == AppDelegate.mainWindowID {
+            return true
+        }
+        return window.title == "BorderCollie" && window.canBecomeMain
     }
 }
 

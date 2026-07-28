@@ -13,6 +13,7 @@ struct UsageTrackerView: View {
     private let expiredMessage: String
     private let genericErrorMessage: String
     private let runsAutoRefresh: Bool
+    private let autoRefreshInterval: Duration
     private let usageLimits: (SubscriptionQuota) -> [UsageLimitDisplay]
 
     @MainActor
@@ -28,6 +29,7 @@ struct UsageTrackerView: View {
         expiredMessage: String,
         genericErrorMessage: String,
         runsAutoRefresh: Bool = true,
+        autoRefreshInterval: Duration = .seconds(30),
         usageLimits: @escaping (SubscriptionQuota) -> [UsageLimitDisplay]
     ) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -41,6 +43,7 @@ struct UsageTrackerView: View {
         self.expiredMessage = expiredMessage
         self.genericErrorMessage = genericErrorMessage
         self.runsAutoRefresh = runsAutoRefresh
+        self.autoRefreshInterval = autoRefreshInterval
         self.usageLimits = usageLimits
     }
 
@@ -85,7 +88,7 @@ struct UsageTrackerView: View {
 
         while !Task.isCancelled {
             do {
-                try await Task.sleep(for: .seconds(30))
+                try await Task.sleep(for: autoRefreshInterval)
             } catch {
                 return
             }
