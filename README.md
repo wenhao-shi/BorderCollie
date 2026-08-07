@@ -1,8 +1,9 @@
 # BorderCollie
 
 BorderCollie is a native macOS SwiftUI app for monitoring coding-agent usage
-limits from one local desktop surface. It currently tracks Codex and Cursor,
-showing remaining usage in the main window and a compact menu-bar popup.
+limits from one local desktop surface. It currently tracks Codex, Cursor, and
+Claude Code, showing remaining usage in the main window and a compact menu-bar
+popup.
 
 The app is local-first by design. Provider credentials are read from
 provider-owned local auth state, used only by provider-specific service/client
@@ -10,7 +11,10 @@ layers, and never passed into SwiftUI views.
 
 ## Features
 
-- Native macOS app with a sidebar for Codex and Cursor trackers.
+- Native macOS app with a sidebar for Codex, Cursor, and Claude Code trackers.
+- Agent brand icons in the sidebar, main window, and menu-bar popup.
+- Automatic Claude Code OAuth token refresh, so a stale access token recovers
+  without re-running the CLI.
 - Menu-bar item with compact usage rows for all tracked agents.
 - Automatic query when a tracker page or menu-bar popup opens.
 - Fixed 30-second auto refresh across tracker pages and the menu-bar popup.

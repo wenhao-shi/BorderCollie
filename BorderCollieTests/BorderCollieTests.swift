@@ -42,10 +42,21 @@ struct BorderCollieTests {
         )
 
         let limits = CodexUsageLimitDisplay.expectedLimits(from: quota)
+        // Pinned rather than defaulted to the current date: reset precision now
+        // depends on the distance to `now`, so a floating clock would make the
+        // expectations drift.
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-02T12:00:00Z")!
+        let utc = TimeZone(secondsFromGMT: 0)!
 
-        #expect(limits.map(\.title) == ["5h", "Weekly"])
+        #expect(limits.map(\.title) == ["5h", "7d"])
         #expect(limits.map(\.percentageText) == ["20%", "60%"])
-        #expect(limits.map { $0.resetText(timeZone: TimeZone(secondsFromGMT: 0)!) } == ["7:24 PM", "Jul 7"])
+        // ICU uses a narrow no-break space (U+202F) before AM/PM.
+        #expect(
+            limits.map {
+                $0.resetText(now: now, timeZone: utc)?
+                    .replacingOccurrences(of: "\u{202F}", with: " ")
+            } == ["7:24 PM", "Tue 12:00 PM"]
+        )
     }
 
     @Test func cursorUsageLimitDisplayShowsMonthlyBuckets() {
@@ -674,7 +685,7 @@ struct BorderCollieTests {
                 .codex(service: CountingUsageTrackingService(toolID: "codex", state: serviceState)),
             ],
             initialRows: [
-                MenuBarUsageRow(id: "codex", title: "Codex", detail: "5h: 80% | 7d: 90%", state: .success),
+                MenuBarUsageRow(id: "codex", title: "Codex", icon: .codex, detail: "5h: 80% | 7d: 90%", state: .success),
             ]
         )
 
@@ -729,6 +740,433 @@ struct BorderCollieTests {
             "Query failed",
         ])
     }
+}
+
+// MARK: - Claude OAuth refresh
+
+extension BorderCollieTests {
+    @Test func claudeCredentialParserDecodesHexEncodedKeychainPayload() {
+        let json = #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-hex","expiresAt":1785200000000}}"#
+        let hex = json.utf8.map { String(format: "%02x", $0) }.joined()
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(hex, now: now, origin: .keychain)
+
+        #expect(credentials.status == .valid)
+        #expect(credentials.accessToken == "sk-ant-oat01-hex")
+    }
+
+    @Test func claudeCredentialParserTreatsExpiredTokenWithRefreshTokenAsUsable() {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T16:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            """
+            {
+              "claudeAiOauth": {
+                "accessToken": "sk-ant-oat01-stale",
+                "refreshToken": "sk-ant-ort01-refresh",
+                "expiresAt": 1785166162351,
+                "scopes": ["user:profile", "user:inference"],
+                "subscriptionType": "max"
+              }
+            }
+            """,
+            now: now,
+            origin: .keychain
+        )
+
+        // An expired access token backed by a refresh token is routine, not a
+        // reason to tell the user their session died.
+        #expect(credentials.status == .valid)
+        #expect(credentials.canRefresh)
+        #expect(credentials.needsRefresh(now: now))
+        #expect(credentials.refreshToken == "sk-ant-ort01-refresh")
+        #expect(credentials.subscriptionType == "max")
+    }
+
+    @Test func claudeCredentialParserKeepsExpiredStatusWithoutRefreshToken() {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T16:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stale","expiresAt":1785166162351}}"#,
+            now: now,
+            origin: .keychain
+        )
+
+        #expect(credentials.status == .expired)
+        #expect(!credentials.canRefresh)
+    }
+
+    @Test func claudeCredentialDocumentRewritePreservesUnknownKeysAndStaysMinified() {
+        let expiresAt = Date(timeIntervalSince1970: 1_785_200_000)
+        let updated = ClaudeCredentialResolver.documentApplying(
+            accessToken: "sk-ant-oat01-new",
+            refreshToken: "sk-ant-ort01-new",
+            expiresAt: expiresAt,
+            to: """
+            {
+              "claudeAiOauth": {
+                "accessToken": "old",
+                "refreshToken": "old-refresh",
+                "expiresAt": 1,
+                "scopes": ["user:profile"]
+              },
+              "someFutureKey": {"keep": true}
+            }
+            """
+        )
+
+        #expect(updated == #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-new","expiresAt":1785200000000,"refreshToken":"sk-ant-ort01-new","scopes":["user:profile"]},"someFutureKey":{"keep":true}}"#)
+        // `security` hex-encodes values containing newlines and Claude Code
+        // cannot read those back, so the document must stay on one line.
+        #expect(!(updated ?? "").contains("\n"))
+    }
+
+    @Test func claudeUsageClientRefreshesExpiredTokenBeforeQuerying() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"stale","refreshToken":"rt","expiresAt":1000}}"#,
+            now: now,
+            origin: .keychain
+        )
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body: #"{"five_hour":{"utilization":48.0,"resets_at":"2026-07-27T17:00:00Z"}}"#
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            tokenRefresher: StubClaudeTokenRefresher(accessToken: "fresh", expiresAt: now.addingTimeInterval(3_600)),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(credentials: credentials)
+
+        #expect(quota.success)
+        #expect(await httpClient.requestCount() == 1)
+        #expect(await httpClient.lastRequest()?.value(forHTTPHeaderField: "Authorization") == "Bearer fresh")
+    }
+
+    @Test func claudeUsageClientRetriesOnceWithRefreshedTokenAfterUnauthorized() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        // expiresAt far in the future: only the 401 can trigger the refresh.
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"revoked","refreshToken":"rt","expiresAt":1893456000000}}"#,
+            now: now,
+            origin: .keychain
+        )
+        let httpClient = SequencedHTTPClient(responses: [
+            (401, "{}"),
+            (200, #"{"five_hour":{"utilization":10.0,"resets_at":"2026-07-27T17:00:00Z"}}"#),
+        ])
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            tokenRefresher: StubClaudeTokenRefresher(accessToken: "fresh", expiresAt: now.addingTimeInterval(3_600)),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(credentials: credentials)
+
+        #expect(quota.success)
+        #expect(await httpClient.requestCount() == 2)
+        #expect(await httpClient.lastRequest()?.value(forHTTPHeaderField: "Authorization") == "Bearer fresh")
+    }
+
+    @Test func claudeUsageClientReportsRefreshFailureAlongsideUnauthorized() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"revoked","refreshToken":"rt","expiresAt":1893456000000}}"#,
+            now: now,
+            origin: .keychain
+        )
+        let client = ClaudeUsageClient(
+            httpClient: CapturingHTTPClient(statusCode: 401, body: "{}"),
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            tokenRefresher: StubClaudeTokenRefresher(failure: .rejected(statusCode: 400)),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(credentials: credentials)
+
+        #expect(!quota.success)
+        #expect(quota.credentialStatus == .expired)
+        #expect(quota.error?.contains("Token refresh was rejected (HTTP 400)") == true)
+    }
+
+    @Test func claudeTokenRefresherPostsRefreshGrantAndPersistsRotatedDocument() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"stale","refreshToken":"rt-old","expiresAt":1000}}"#,
+            now: now,
+            origin: .keychain
+        )
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body: #"{"access_token":"at-new","refresh_token":"rt-new","expires_in":28800}"#
+        )
+        let persister = RecordingCredentialPersister()
+        let refresher = ClaudeTokenRefresher(
+            httpClient: httpClient,
+            persister: persister,
+            endpoint: URL(string: "https://example.test/oauth/token")!,
+            now: { now }
+        )
+
+        let result = await refresher.refresh(credentials)
+
+        guard case .success(let refreshed) = result else {
+            Issue.record("expected refresh to succeed, got \(result)")
+            return
+        }
+        #expect(refreshed.accessToken == "at-new")
+        #expect(refreshed.expiresAt == now.addingTimeInterval(28_800))
+        #expect(refreshed.persisted)
+
+        let request = await httpClient.lastRequest()
+        #expect(request?.httpMethod == "POST")
+        let body = String(data: request?.httpBody ?? Data(), encoding: .utf8) ?? ""
+        #expect(body.contains("grant_type=refresh_token"))
+        #expect(body.contains("refresh_token=rt-old"))
+        #expect(body.contains("client_id=\(ClaudeTokenRefresher.clientID)"))
+
+        // The rotated refresh token has to land back where Claude Code reads it,
+        // otherwise the CLI keeps an invalidated one.
+        let written = persister.lastDocument()
+        #expect(written?.contains(#""refreshToken":"rt-new""#) == true)
+        #expect(written?.contains(#""accessToken":"at-new""#) == true)
+        #expect(persister.lastOrigin() == .keychain)
+    }
+
+    @Test func claudeTokenRefresherRefusesWithoutRefreshToken() async {
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"stale","expiresAt":1000}}"#,
+            origin: .keychain
+        )
+        let refresher = ClaudeTokenRefresher(
+            httpClient: CapturingHTTPClient(statusCode: 200, body: "{}"),
+            persister: RecordingCredentialPersister(),
+            endpoint: URL(string: "https://example.test/oauth/token")!
+        )
+
+        #expect(await refresher.refresh(credentials) == .failure(.notRefreshable))
+    }
+
+    @Test func claudeTokenRefresherRefusesWhenCredentialStoreIsNotWritable() async {
+        let credentials = ClaudeCredentialResolver.parseClaudeCredentialsJSON(
+            #"{"claudeAiOauth":{"accessToken":"stale","refreshToken":"rt-old","expiresAt":1000}}"#,
+            origin: .keychain
+        )
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body: #"{"access_token":"at-new","refresh_token":"rt-new","expires_in":28800}"#
+        )
+        let refresher = ClaudeTokenRefresher(
+            httpClient: httpClient,
+            persister: RejectingCredentialPersister(),
+            endpoint: URL(string: "https://example.test/oauth/token")!
+        )
+
+        #expect(await refresher.refresh(credentials) == .failure(.notWritable))
+        // The refresh token must not be spent when the rotated one cannot be
+        // saved: doing so would invalidate Claude Code's own session.
+        #expect(await httpClient.requestCount() == 0)
+    }
+
+    @Test func claudeUsageClientParsesModelScopedWeeklyWindows() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": {"utilization": 48.0, "resets_at": "2026-07-27T17:00:00.521744+00:00"},
+              "seven_day": {"utilization": 64.0, "resets_at": "2026-08-01T06:00:00.521764+00:00"},
+              "seven_day_opus": {"utilization": 12.0, "resets_at": "2026-08-01T06:00:00Z"},
+              "limits": [
+                {
+                  "kind": "weekly_scoped",
+                  "percent": 30.0,
+                  "resets_at": "2026-08-01T06:00:00Z",
+                  "is_active": true,
+                  "scope": {"model": {"id": "claude-fable-5", "display_name": "Fable"}}
+                }
+              ],
+              "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 320, "currency": "usd"}
+            }
+            """
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(quota.tiers == [
+            QuotaTier(name: "five_hour", utilization: 48.0, resetsAt: "2026-07-27T17:00:00Z"),
+            QuotaTier(name: "seven_day", utilization: 64.0, resetsAt: "2026-08-01T06:00:00Z"),
+            QuotaTier(name: "seven_day_fable", utilization: 30.0, resetsAt: "2026-08-01T06:00:00Z"),
+            QuotaTier(name: "seven_day_opus", utilization: 12.0, resetsAt: "2026-08-01T06:00:00Z"),
+        ])
+        #expect(quota.extraUsage == "$3.20 of $50.00")
+
+        let limits = ClaudeUsageLimitDisplay.usageLimits(from: quota)
+        #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable", "7d · Opus"])
+    }
+
+    @Test func resetTextPrecisionFollowsDistanceNotWindowLength() {
+        let utc = TimeZone(secondsFromGMT: 0)!
+        // A Friday.
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-08-07T12:00:00Z")!
+
+        // ICU separates the time from AM/PM with a narrow no-break space
+        // (U+202F), not the plain space a source literal carries.
+        func reset(_ resetsAt: String) -> String? {
+            UsageResetFormatting.text(forResetsAt: resetsAt, now: now, timeZone: utc)?
+                .replacingOccurrences(of: "\u{202F}", with: " ")
+        }
+
+        // Same calendar day: only the clock time carries information.
+        #expect(reset("2026-08-07T21:40:00Z") == "9:40 PM")
+        // Within the week: weekday plus time. Minutes are kept because reset
+        // timestamps are not always on the hour.
+        #expect(reset("2026-08-10T20:47:00Z") == "Mon 8:47 PM")
+        #expect(reset("2026-08-13T06:00:00Z") == "Thu 6:00 AM")
+        // Seven days out or more, the weekday would be ambiguous.
+        #expect(reset("2026-08-14T06:00:00Z") == "Aug 14")
+        #expect(reset("2026-09-03T06:00:00Z") == "Sep 3")
+        // Already rolled over: fall through to the date rather than implying
+        // a reset that has not happened.
+        #expect(reset("2026-08-05T06:00:00Z") == "Aug 5")
+
+        #expect(UsageResetFormatting.text(forResetsAt: nil, now: now, timeZone: utc) == nil)
+        #expect(UsageResetFormatting.text(forResetsAt: "not-a-date", now: now, timeZone: utc) == nil)
+    }
+
+    @Test func resetTextUsesCalendarDayBoundaryNotRollingHours() {
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-08-07T23:00:00Z")!
+
+        func reset(_ resetsAt: String) -> String? {
+            UsageResetFormatting.text(forResetsAt: resetsAt, now: now, timeZone: utc)?
+                .replacingOccurrences(of: "\u{202F}", with: " ")
+        }
+
+        // 30 minutes away, but on the next calendar day: naming the day keeps
+        // "11:30 PM vs 11:30 PM tomorrow" from being ambiguous.
+        #expect(reset("2026-08-08T00:30:00Z")?.hasPrefix("Sat") == true)
+        // Same day, 30 minutes earlier.
+        #expect(reset("2026-08-07T23:30:00Z") == "11:30 PM")
+    }
+
+    @Test func menuBarRowsCarryPerWindowLimitsForSuccessfulQueries() async {
+        let quota = SubscriptionQuota(
+            tool: "claude_code",
+            credentialStatus: .valid,
+            credentialMessage: nil,
+            success: true,
+            tiers: [
+                QuotaTier(name: "five_hour", utilization: 48, resetsAt: "2026-07-27T17:00:00Z"),
+                QuotaTier(name: "seven_day", utilization: 64, resetsAt: "2026-08-01T06:00:00Z"),
+            ],
+            extraUsage: nil,
+            error: nil,
+            queriedAt: nil
+        )
+        let viewModel = await MenuBarUsageViewModel(
+            agents: [.claudeCode(service: StubUsageTrackingService(toolID: "claude_code", quota: quota))]
+        )
+
+        await viewModel.refresh()
+
+        let limits = await viewModel.rows.first?.limits ?? []
+        #expect(limits.map(\.title) == ["5h", "7d"])
+        #expect(limits.map(\.percentageText) == ["52%", "36%"])
+    }
+
+    @Test func menuBarRowsHaveNoLimitsWhenQueryFails() async {
+        let viewModel = await MenuBarUsageViewModel(
+            agents: [.claudeCode(service: StubUsageTrackingService(toolID: "claude_code", quota: .notFound(tool: "claude_code")))]
+        )
+
+        await viewModel.refresh()
+
+        #expect(await viewModel.rows.first?.limits.isEmpty == true)
+        #expect(await viewModel.rows.first?.detail == "Sign in required")
+    }
+}
+
+private struct StubClaudeTokenRefresher: ClaudeTokenRefreshing {
+    var result: Result<ClaudeRefreshedToken, ClaudeTokenRefreshError>
+
+    init(accessToken: String, expiresAt: Date) {
+        result = .success(ClaudeRefreshedToken(accessToken: accessToken, expiresAt: expiresAt, persisted: true))
+    }
+
+    init(failure: ClaudeTokenRefreshError) {
+        result = .failure(failure)
+    }
+
+    func refresh(_ credentials: ClaudeCredentials) async -> Result<ClaudeRefreshedToken, ClaudeTokenRefreshError> {
+        result
+    }
+}
+
+private final class RecordingCredentialPersister: ClaudeCredentialPersisting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var documents: [(String, ClaudeCredentialOrigin)] = []
+
+    func persist(_ document: String, to origin: ClaudeCredentialOrigin) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        documents.append((document, origin))
+        return true
+    }
+
+    func lastDocument() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return documents.last?.0
+    }
+
+    func lastOrigin() -> ClaudeCredentialOrigin? {
+        lock.lock()
+        defer { lock.unlock() }
+        return documents.last?.1
+    }
+}
+
+private struct RejectingCredentialPersister: ClaudeCredentialPersisting {
+    func persist(_ document: String, to origin: ClaudeCredentialOrigin) -> Bool { false }
+}
+
+private actor SequencedHTTPClient: UsageHTTPClient {
+    private let responses: [(statusCode: Int, body: String)]
+    private var requests: [URLRequest] = []
+
+    init(responses: [(statusCode: Int, body: String)]) {
+        self.responses = responses
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let index = min(requests.count, responses.count - 1)
+        requests.append(request)
+        let entry = responses[index]
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: entry.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+        return (Data(entry.body.utf8), response)
+    }
+
+    func lastRequest() -> URLRequest? { requests.last }
+    func requestCount() -> Int { requests.count }
 }
 
 private final class ClaudeTestClock: @unchecked Sendable {

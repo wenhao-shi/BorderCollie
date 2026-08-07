@@ -28,7 +28,7 @@ struct AgentUsageMenuBarView: View {
             footerActions
         }
         .padding(14)
-        .frame(width: 320, alignment: .topLeading)
+        .frame(width: 360, alignment: .topLeading)
         .task {
             await runAutoRefreshLoop()
         }
@@ -80,22 +80,30 @@ struct AgentUsageMenuBarView: View {
         .buttonStyle(.borderless)
     }
 
+    /// Icon on the left, usage on the right. The icon identifies the agent, so
+    /// the name is carried only as an accessibility label.
     private func usageRow(_ row: MenuBarUsageRow) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(row.title)
-                .font(.subheadline)
-                .fontWeight(.semibold)
+        HStack(alignment: .center, spacing: 12) {
+            AgentIconView(icon: row.icon, size: 28)
 
-            Text(row.detail)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(detailForegroundStyle(for: row.state))
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+            if row.limits.isEmpty {
+                Text(row.detail)
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(detailForegroundStyle(for: row.state))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            } else {
+                UsageLimitsGrid(limits: row.limits, font: .caption)
+            }
+
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
+        .padding(10)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(row.title). \(row.detail)")
     }
 
     @MainActor

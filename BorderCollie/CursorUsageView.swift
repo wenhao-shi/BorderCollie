@@ -13,6 +13,7 @@ struct CursorUsageView: View {
     var body: some View {
         UsageTrackerView(
             title: "Cursor",
+            icon: .cursor,
             viewModel: viewModel,
             queryingTitle: "Querying Cursor quota...",
             readyMessage: "Refresh to read Cursor IDE credentials and query current usage.",

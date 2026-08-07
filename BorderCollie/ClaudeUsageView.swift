@@ -13,6 +13,7 @@ struct ClaudeUsageView: View {
     var body: some View {
         UsageTrackerView(
             title: "Claude Code",
+            icon: .claudeCode,
             viewModel: viewModel,
             queryingTitle: "Querying Claude Code quota...",
             readyMessage: "Refresh to read Claude Code OAuth credentials and query current usage.",

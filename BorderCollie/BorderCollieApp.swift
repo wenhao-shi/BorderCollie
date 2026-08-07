@@ -16,8 +16,11 @@ struct BorderCollieApp: App {
             ContentView()
         }
 
-        MenuBarExtra("BorderCollie", systemImage: "gauge") {
+        MenuBarExtra {
             AgentUsageMenuBarView()
+        } label: {
+            Image(nsImage: .borderCollieMenuBarIcon)
+                .accessibilityLabel("BorderCollie")
         }
         .menuBarExtraStyle(.window)
     }

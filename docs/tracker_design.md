@@ -30,11 +30,15 @@ The current Codex screen defines the product standard for future trackers:
 - Do not repeat the tracker name as a large heading in the detail body.
 - Auth implementation details are not shown during normal operation.
 - The main section title is `Usage remaining`.
+- The agent's brand icon sits left of the usage rows, aligned horizontally.
 - Each usage window is shown as:
-  - A human label, such as `5h` or `Weekly`.
+  - A human label, such as `5h` or `7d`.
   - Remaining percentage, not used percentage.
-  - A reset indicator.
+  - An absolute reset time. See
+    `docs/claude-oauth-refresh-and-usage-ui.md` for the precision rules.
   - A native SwiftUI `ProgressView` bar.
+- Main window and menu bar share `UsageLimitsGrid` so the two surfaces cannot
+  drift apart in wording or column alignment.
 - The updated timestamp is static for a given query result. It updates only when
   a refresh succeeds or fails with a new `queriedAt` value.
 - Manual refresh lives in the top toolbar, not inside the content card.
@@ -207,7 +211,7 @@ Known Codex windows:
 | Remote seconds | Tier name | UI label |
 | --- | --- | --- |
 | `18000` | `five_hour` | `5h` |
-| `604800` | `seven_day` | `Weekly` |
+| `604800` | `seven_day` | `7d` |
 
 The compact menu-bar labels are `5h` and `7d`.
 
@@ -353,7 +357,7 @@ Known Claude Code windows:
 | Tier name | UI label |
 | --- | --- |
 | `five_hour` | `5h` |
-| `seven_day` | `Weekly` |
+| `seven_day` | `7d` |
 
 The compact menu-bar labels are `5h` and `7d`.
 
@@ -390,7 +394,7 @@ Reuse the current tracker detail pattern:
 
 For the menu bar, reuse the compact companion pattern:
 
-- `MenuBarExtra("BorderCollie", systemImage: "gauge")`.
+- `MenuBarExtra` with the `MenuBarIcon` asset as a template image.
 - `.menuBarExtraStyle(.window)` for room to show row states.
 - One compact row per tracker.
 - Provider-specific compact formatter functions near each provider's display
@@ -404,8 +408,11 @@ Reuse these rules:
 - Store used percentage in the data model.
 - Clamp remaining percentage to `0...100`.
 - Use monospaced digits for percentages and reset values.
-- Format short-window resets as time.
-- Format weekly or longer resets as date.
+- Show absolute reset times, never countdowns: a countdown is correct only at
+  the instant it renders.
+- Choose reset precision by distance to the reset, not by window length. One
+  rule in `UsageResetFormatting` covers every tracker; do not add per-window
+  formatting styles.
 - Do not show credential details in the happy path.
 - Compact menu-bar summaries should use whole-number remaining percentages.
 
@@ -482,7 +489,7 @@ Tracker-specific display labels may differ, but the display layout should not.
 
 Examples:
 
-- Codex uses `5h` and `Weekly`.
+- Codex and Claude Code use `5h` and `7d`.
 - A future tracker may use labels like `Daily`, `Monthly`, `Requests`, or
   `Credits`, depending on the provider contract.
 
@@ -558,7 +565,8 @@ needs a different user experience.
 
 5. **Add display policy**
    - Add window labels.
-   - Add reset formatting rules if the default time/date split is not enough.
+   - Reset formatting is shared and distance-based; a new tracker should not
+     need its own rules.
    - Keep the card layout consistent.
 
 6. **Wire navigation**

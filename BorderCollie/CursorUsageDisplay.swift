@@ -31,8 +31,7 @@ enum CursorUsageLimitDisplay {
             UsageLimitDisplay(
                 id: kind.id,
                 title: kind.title,
-                tier: quota.tiers.first { $0.name == kind.rawValue },
-                resetStyle: .date
+                tier: quota.tiers.first { $0.name == kind.rawValue }
             )
         }
     }

@@ -10,22 +10,47 @@ enum MenuBarUsageRowState: Equatable, Sendable {
 struct MenuBarUsageRow: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
+    let icon: AgentIcon
+    /// One-line summary. Carries the failure text when `limits` is empty.
     let detail: String
+    /// Per-window breakdown, rendered with a reset countdown. Empty unless the
+    /// query succeeded.
+    let limits: [UsageLimitDisplay]
     let state: MenuBarUsageRowState
+
+    init(
+        id: String,
+        title: String,
+        icon: AgentIcon,
+        detail: String,
+        limits: [UsageLimitDisplay] = [],
+        state: MenuBarUsageRowState
+    ) {
+        self.id = id
+        self.title = title
+        self.icon = icon
+        self.detail = detail
+        self.limits = limits
+        self.state = state
+    }
 }
 
 struct MenuBarUsageAgent: Identifiable, Sendable {
     let id: String
     let title: String
+    let icon: AgentIcon
     let service: any UsageTrackingService
     let compactSummary: @Sendable (SubscriptionQuota) -> String
+    let usageLimits: @Sendable (SubscriptionQuota) -> [UsageLimitDisplay]
 
     static func codex(service: any UsageTrackingService = CodexQuotaService.live) -> MenuBarUsageAgent {
         MenuBarUsageAgent(
             id: "codex",
             title: "Codex",
+            icon: .codex,
             service: service,
-            compactSummary: CodexUsageLimitDisplay.compactSummary
+            compactSummary: CodexUsageLimitDisplay.compactSummary,
+            usageLimits: CodexUsageLimitDisplay.usageLimits
         )
     }
 
@@ -33,8 +58,10 @@ struct MenuBarUsageAgent: Identifiable, Sendable {
         MenuBarUsageAgent(
             id: "cursor",
             title: "Cursor",
+            icon: .cursor,
             service: service,
-            compactSummary: CursorUsageLimitDisplay.compactSummary
+            compactSummary: CursorUsageLimitDisplay.compactSummary,
+            usageLimits: CursorUsageLimitDisplay.usageLimits
         )
     }
 
@@ -42,8 +69,10 @@ struct MenuBarUsageAgent: Identifiable, Sendable {
         MenuBarUsageAgent(
             id: "claude_code",
             title: "Claude Code",
+            icon: .claudeCode,
             service: service,
-            compactSummary: ClaudeUsageLimitDisplay.compactSummary
+            compactSummary: ClaudeUsageLimitDisplay.compactSummary,
+            usageLimits: ClaudeUsageLimitDisplay.usageLimits
         )
     }
 }
@@ -109,13 +138,16 @@ final class MenuBarUsageViewModel: ObservableObject {
             MenuBarUsageRow(
                 id: agent.id,
                 title: agent.title,
+                icon: agent.icon,
                 detail: agent.compactSummary(quota),
+                limits: agent.usageLimits(quota),
                 state: .success
             )
         case .success(let quota):
             MenuBarUsageRow(
                 id: agent.id,
                 title: agent.title,
+                icon: agent.icon,
                 detail: unavailableText(for: quota),
                 state: .unavailable
             )
@@ -123,6 +155,7 @@ final class MenuBarUsageViewModel: ObservableObject {
             MenuBarUsageRow(
                 id: agent.id,
                 title: agent.title,
+                icon: agent.icon,
                 detail: "Timed out",
                 state: .unavailable
             )
@@ -146,6 +179,7 @@ final class MenuBarUsageViewModel: ObservableObject {
         MenuBarUsageRow(
             id: agent.id,
             title: agent.title,
+            icon: agent.icon,
             detail: "Loading...",
             state: .loading
         )
@@ -170,12 +204,34 @@ extension MenuBarUsageViewModel {
                 .claudeCode(service: StaticUsageTrackingService(toolID: "claude_code", quota: .previewMenuBarClaudeUsage)),
             ],
             initialRows: [
-                MenuBarUsageRow(id: "codex", title: "Codex", detail: "5h: 80% | 7d: 90%", state: .success),
-                MenuBarUsageRow(id: "cursor", title: "Cursor", detail: "Auto: 95% | API: 60%", state: .success),
-                MenuBarUsageRow(id: "claude_code", title: "Claude Code", detail: "5h: 52% | 7d: 36%", state: .success),
+                previewRow(id: "codex", title: "Codex", icon: .codex, quota: .previewMenuBarCodexUsage, limits: CodexUsageLimitDisplay.usageLimits),
+                previewRow(id: "cursor", title: "Cursor", icon: .cursor, quota: .previewMenuBarCursorUsage, limits: CursorUsageLimitDisplay.usageLimits),
+                previewRow(id: "claude_code", title: "Claude Code", icon: .claudeCode, quota: .previewMenuBarClaudeUsage, limits: ClaudeUsageLimitDisplay.usageLimits),
             ]
         )
     }
+
+    private static func previewRow(
+        id: String,
+        title: String,
+        icon: AgentIcon,
+        quota: SubscriptionQuota,
+        limits: (SubscriptionQuota) -> [UsageLimitDisplay]
+    ) -> MenuBarUsageRow {
+        let resolved = limits(quota)
+        return MenuBarUsageRow(
+            id: id,
+            title: title,
+            icon: icon,
+            detail: resolved.map { "\($0.title): \($0.percentageText)" }.joined(separator: " | "),
+            limits: resolved,
+            state: .success
+        )
+    }
+}
+
+private func previewResetsAt(inHours hours: Double) -> String {
+    ISO8601DateFormatter.codexWithoutFractionalSeconds.string(from: Date().addingTimeInterval(hours * 3_600))
 }
 
 private extension SubscriptionQuota {
@@ -186,8 +242,8 @@ private extension SubscriptionQuota {
             credentialMessage: nil,
             success: true,
             tiers: [
-                QuotaTier(name: "five_hour", utilization: 20, resetsAt: "2026-07-03T02:24:00Z"),
-                QuotaTier(name: "seven_day", utilization: 10, resetsAt: "2026-07-07T12:00:00Z"),
+                QuotaTier(name: "five_hour", utilization: 20, resetsAt: previewResetsAt(inHours: 3.4)),
+                QuotaTier(name: "seven_day", utilization: 10, resetsAt: previewResetsAt(inHours: 86)),
             ],
             extraUsage: nil,
             error: nil,
@@ -202,8 +258,8 @@ private extension SubscriptionQuota {
             credentialMessage: nil,
             success: true,
             tiers: [
-                QuotaTier(name: CursorUsageLimitKind.autoComposer.rawValue, utilization: 5, resetsAt: "2026-07-30T03:12:17Z"),
-                QuotaTier(name: CursorUsageLimitKind.api.rawValue, utilization: 40, resetsAt: "2026-07-30T03:12:17Z"),
+                QuotaTier(name: CursorUsageLimitKind.autoComposer.rawValue, utilization: 5, resetsAt: previewResetsAt(inHours: 320)),
+                QuotaTier(name: CursorUsageLimitKind.api.rawValue, utilization: 40, resetsAt: previewResetsAt(inHours: 320)),
             ],
             extraUsage: nil,
             error: nil,
@@ -218,8 +274,8 @@ private extension SubscriptionQuota {
             credentialMessage: nil,
             success: true,
             tiers: [
-                QuotaTier(name: ClaudeUsageLimitKind.fiveHour.rawValue, utilization: 48, resetsAt: "2026-07-27T20:00:00Z"),
-                QuotaTier(name: ClaudeUsageLimitKind.week.rawValue, utilization: 64, resetsAt: "2026-08-01T06:00:00Z"),
+                QuotaTier(name: ClaudeUsageLimitKind.fiveHour.rawValue, utilization: 48, resetsAt: previewResetsAt(inHours: 4.5)),
+                QuotaTier(name: ClaudeUsageLimitKind.week.rawValue, utilization: 64, resetsAt: previewResetsAt(inHours: 158)),
             ],
             extraUsage: nil,
             error: nil,

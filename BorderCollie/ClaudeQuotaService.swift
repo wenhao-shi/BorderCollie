@@ -28,6 +28,7 @@ struct ClaudeQuotaService: UsageTrackingService {
         switch credentials.status {
         case .notFound:
             return .notFound(tool: toolID)
+
         case .parseError:
             return .error(
                 tool: toolID,
@@ -35,9 +36,12 @@ struct ClaudeQuotaService: UsageTrackingService {
                 message: credentials.message ?? "Failed to parse Claude Code credentials",
                 now: now()
             )
+
         case .expired:
-            if let accessToken = credentials.accessToken {
-                let result = await usageClient.queryClaudeQuota(accessToken: accessToken)
+            // Expiry without a usable refresh token. The token may still work if
+            // the local clock is ahead, so try once before reporting sign-in.
+            if credentials.accessToken != nil {
+                let result = await usageClient.queryClaudeQuota(credentials: credentials)
                 if result.success {
                     return result
                 }
@@ -49,8 +53,9 @@ struct ClaudeQuotaService: UsageTrackingService {
                 message: credentials.message ?? "Claude Code credentials need refresh",
                 now: now()
             )
+
         case .valid:
-            guard let accessToken = credentials.accessToken else {
+            guard credentials.accessToken != nil else {
                 return .error(
                     tool: toolID,
                     status: .parseError,
@@ -59,7 +64,7 @@ struct ClaudeQuotaService: UsageTrackingService {
                 )
             }
 
-            return await usageClient.queryClaudeQuota(accessToken: accessToken)
+            return await usageClient.queryClaudeQuota(credentials: credentials)
         }
     }
 }

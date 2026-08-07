@@ -25,8 +25,10 @@ Window("BorderCollie", id: "main") {
     ContentView()
 }
 
-MenuBarExtra("BorderCollie", systemImage: "gauge") {
+MenuBarExtra {
     AgentUsageMenuBarView()
+} label: {
+    Image(nsImage: .borderCollieMenuBarIcon)
 }
 .menuBarExtraStyle(.window)
 ```
@@ -37,7 +39,7 @@ reduced to simple commands only.
 
 Closing the main window does not quit the app. `AppDelegate` returns `false`
 from `applicationShouldTerminateAfterLastWindowClosed` and switches the
-activation policy to `.accessory`, which hides the Dock icon while the gauge
+activation policy to `.accessory`, which hides the Dock icon while the
 menu-bar item keeps running. Use **Show Window** to restore the Dock icon and
 main window, or **Quit BorderCollie** / Cmd+Q to exit fully.
 
@@ -47,7 +49,11 @@ The popup uses a single compact column:
 
 - Header: `Usage remaining` with a gauge icon.
 - Header action: icon-only refresh button using `arrow.clockwise`.
-- Body: one row per tracked agent.
+- Body: one row per tracked agent, with the agent's brand icon on the left and
+  its usage rows on the right. The agent name is carried only as an
+  accessibility label, since the icon identifies it.
+- Each usage row shows label, remaining percentage, absolute reset time, and a
+  progress bar.
 - Footer: `Show Window` and `Quit BorderCollie` actions for the hybrid
   menu-bar lifecycle.
 

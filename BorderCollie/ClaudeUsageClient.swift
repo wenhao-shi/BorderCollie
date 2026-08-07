@@ -4,33 +4,113 @@ struct ClaudeUsageClient: Sendable {
     private let httpClient: UsageHTTPClient
     private let endpoint: URL
     private let requestGate: ClaudeUsageRequestGate
+    private let tokenRefresher: any ClaudeTokenRefreshing
     private let now: @Sendable () -> Date
 
     init(
         httpClient: UsageHTTPClient = URLSessionUsageHTTPClient(),
         endpoint: URL = URL(string: "https://api.anthropic.com/api/oauth/usage")!,
         requestGate: ClaudeUsageRequestGate = .shared,
+        tokenRefresher: any ClaudeTokenRefreshing = ClaudeTokenRefresher.shared,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.httpClient = httpClient
         self.endpoint = endpoint
         self.requestGate = requestGate
+        self.tokenRefresher = tokenRefresher
         self.now = now
     }
 
+    /// Queries usage with automatic OAuth refresh.
+    ///
+    /// The stored access token is short-lived and only the CLI renews it, so a
+    /// background poller has to refresh both proactively (token at or past its
+    /// expiry) and reactively (server says 401 anyway — clock skew, or the token
+    /// was revoked server-side before its nominal expiry).
     func queryClaudeQuota(
-        accessToken: String,
+        credentials: ClaudeCredentials,
         toolLabel: String = "claude_code",
         expiredMessage: String = "Authentication failed. Please sign in with Claude Code again."
     ) async -> SubscriptionQuota {
-        let currentTime = now()
-        switch await requestGate.decision(now: currentTime) {
+        switch await requestGate.decision(now: now()) {
         case .serveCached(let cached):
             return cached
         case .allowNetwork:
             break
         }
 
+        guard var accessToken = credentials.accessToken else {
+            await requestGate.recordFailure(at: now())
+            return .error(
+                tool: toolLabel,
+                status: .parseError,
+                message: "Claude Code access token is empty or missing",
+                now: now()
+            )
+        }
+
+        var refreshFailure: ClaudeTokenRefreshError?
+
+        if credentials.needsRefresh(now: now()), credentials.canRefresh {
+            switch await tokenRefresher.refresh(credentials) {
+            case .success(let refreshed):
+                accessToken = refreshed.accessToken
+            case .failure(let error):
+                refreshFailure = error
+            }
+        }
+
+        var outcome = await fetchUsage(accessToken: accessToken, toolLabel: toolLabel)
+
+        if case .unauthorized = outcome, credentials.canRefresh {
+            switch await tokenRefresher.refresh(credentials) {
+            case .success(let refreshed):
+                accessToken = refreshed.accessToken
+                outcome = await fetchUsage(accessToken: accessToken, toolLabel: toolLabel)
+            case .failure(let error):
+                refreshFailure = error
+            }
+        }
+
+        return await finish(
+            outcome,
+            toolLabel: toolLabel,
+            expiredMessage: expiredMessage,
+            refreshFailure: refreshFailure
+        )
+    }
+
+    /// Queries usage with a caller-supplied token and no refresh capability.
+    func queryClaudeQuota(
+        accessToken: String,
+        toolLabel: String = "claude_code",
+        expiredMessage: String = "Authentication failed. Please sign in with Claude Code again."
+    ) async -> SubscriptionQuota {
+        switch await requestGate.decision(now: now()) {
+        case .serveCached(let cached):
+            return cached
+        case .allowNetwork:
+            break
+        }
+
+        let outcome = await fetchUsage(accessToken: accessToken, toolLabel: toolLabel)
+        return await finish(
+            outcome,
+            toolLabel: toolLabel,
+            expiredMessage: expiredMessage,
+            refreshFailure: nil
+        )
+    }
+
+    private enum FetchOutcome {
+        case quota(SubscriptionQuota)
+        case unauthorized(statusCode: Int, missingScope: Bool)
+        case rateLimited(retryAfter: TimeInterval?)
+        case transportError(String)
+        case httpError(statusCode: Int, bodyPreview: String)
+    }
+
+    private func fetchUsage(accessToken: String, toolLabel: String) async -> FetchOutcome {
         var request = URLRequest(url: endpoint, timeoutInterval: 15)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -44,45 +124,95 @@ struct ClaudeUsageClient: Sendable {
         do {
             (data, response) = try await httpClient.data(for: request)
         } catch {
-            await requestGate.recordFailure(at: now())
-            return SubscriptionQuota.error(
-                tool: toolLabel,
-                status: .valid,
-                message: "Network error: \(error.localizedDescription)",
-                now: now()
-            )
+            return .transportError(error.localizedDescription)
         }
 
         switch response.statusCode {
         case 200..<300:
-            let quota = decodeUsageResponse(data, toolLabel: toolLabel)
+            return .quota(decodeUsageResponse(data, toolLabel: toolLabel))
+        case 401, 403:
+            let body = String(data: data, encoding: .utf8) ?? ""
+            return .unauthorized(
+                statusCode: response.statusCode,
+                missingScope: response.statusCode == 403 && body.contains("user:profile")
+            )
+        case 429:
+            return .rateLimited(retryAfter: ClaudeUsageRequestGate.retryAfterSeconds(from: response))
+        default:
+            return .httpError(statusCode: response.statusCode, bodyPreview: bodyPreview(from: data))
+        }
+    }
+
+    private func finish(
+        _ outcome: FetchOutcome,
+        toolLabel: String,
+        expiredMessage: String,
+        refreshFailure: ClaudeTokenRefreshError?
+    ) async -> SubscriptionQuota {
+        switch outcome {
+        case .quota(let quota):
             if quota.success {
                 await requestGate.recordSuccess(quota, at: now())
             } else {
                 await requestGate.recordFailure(at: now())
             }
             return quota
-        case 401, 403:
+
+        case .unauthorized(let statusCode, let missingScope):
             await requestGate.recordFailure(at: now())
-            return SubscriptionQuota.error(
+            if missingScope {
+                return .error(
+                    tool: toolLabel,
+                    status: .expired,
+                    message: "Claude OAuth token is missing the 'user:profile' scope. Run 'claude setup-token'.",
+                    now: now()
+                )
+            }
+            return .error(
                 tool: toolLabel,
                 status: .expired,
-                message: "\(expiredMessage) (HTTP \(response.statusCode))",
+                message: "\(expiredMessage)\(Self.refreshSuffix(refreshFailure)) (HTTP \(statusCode))",
                 now: now()
             )
-        case 429:
-            return await requestGate.recordRateLimit(
-                retryAfterSeconds: ClaudeUsageRequestGate.retryAfterSeconds(from: response),
-                at: now()
-            )
-        default:
+
+        case .rateLimited(let retryAfter):
+            return await requestGate.recordRateLimit(retryAfterSeconds: retryAfter, at: now())
+
+        case .transportError(let description):
             await requestGate.recordFailure(at: now())
-            return SubscriptionQuota.error(
+            return .error(
                 tool: toolLabel,
                 status: .valid,
-                message: "API error (HTTP \(response.statusCode)): \(bodyPreview(from: data))",
+                message: "Network error: \(description)",
                 now: now()
             )
+
+        case .httpError(let statusCode, let preview):
+            await requestGate.recordFailure(at: now())
+            return .error(
+                tool: toolLabel,
+                status: .valid,
+                message: "API error (HTTP \(statusCode)): \(preview)",
+                now: now()
+            )
+        }
+    }
+
+    private static func refreshSuffix(_ failure: ClaudeTokenRefreshError?) -> String {
+        switch failure {
+        case nil:
+            ""
+        case .notRefreshable:
+            " Token refresh unavailable — no stored refresh token."
+        case .notWritable:
+            " BorderCollie cannot write to Claude Code's credential store, so it "
+                + "will not refresh the token; grant keychain access or run 'claude'."
+        case .rejected(let statusCode):
+            " Token refresh was rejected (HTTP \(statusCode))."
+        case .malformedResponse:
+            " Token refresh returned an unreadable response."
+        case .transport(let description):
+            " Token refresh failed: \(description)."
         }
     }
 
@@ -91,7 +221,7 @@ struct ClaudeUsageClient: Sendable {
         do {
             usageResponse = try JSONDecoder().decode(ClaudeOAuthUsageResponse.self, from: data)
         } catch {
-            return SubscriptionQuota.error(
+            return .error(
                 tool: toolLabel,
                 status: .valid,
                 message: "Failed to parse API response: \(error.localizedDescription)",
@@ -99,25 +229,60 @@ struct ClaudeUsageClient: Sendable {
             )
         }
 
-        let tiers = [
-            usageResponse.fiveHour.map {
+        var tiers: [QuotaTier] = []
+
+        if let fiveHour = usageResponse.fiveHour {
+            tiers.append(
                 QuotaTier(
                     name: ClaudeUsageLimitKind.fiveHour.rawValue,
-                    utilization: $0.utilization,
-                    resetsAt: Self.normalizedResetsAt($0.resetsAt)
+                    utilization: fiveHour.utilization,
+                    resetsAt: Self.normalizedResetsAt(fiveHour.resetsAt)
                 )
-            },
-            usageResponse.sevenDay.map {
+            )
+        }
+
+        if let sevenDay = usageResponse.sevenDay {
+            tiers.append(
                 QuotaTier(
                     name: ClaudeUsageLimitKind.week.rawValue,
-                    utilization: $0.utilization,
-                    resetsAt: Self.normalizedResetsAt($0.resetsAt)
+                    utilization: sevenDay.utilization,
+                    resetsAt: Self.normalizedResetsAt(sevenDay.resetsAt)
                 )
-            },
-        ].compactMap { $0 }
+            )
+        }
+
+        // Model-scoped weekly windows arrive two ways. The structured `limits`
+        // array is authoritative, so let it overwrite any flat `seven_day_<model>`
+        // key for the same model.
+        var modelTiers: [String: QuotaTier] = [:]
+        for (model, window) in usageResponse.modelWindows {
+            modelTiers[model] = QuotaTier(
+                name: ClaudeUsageLimitKind.modelWeekTierName(model: model),
+                utilization: window.utilization,
+                resetsAt: Self.normalizedResetsAt(window.resetsAt)
+            )
+        }
+        for limit in usageResponse.limits {
+            guard limit.kind == "weekly_scoped", limit.isActive != false,
+                  let percent = limit.percent,
+                  let model = (limit.scope?.model?.displayName ?? limit.scope?.model?.id)?
+                      .lowercased()
+                      .replacingOccurrences(of: " ", with: "_"),
+                  !model.isEmpty
+            else {
+                continue
+            }
+
+            modelTiers[model] = QuotaTier(
+                name: ClaudeUsageLimitKind.modelWeekTierName(model: model),
+                utilization: percent,
+                resetsAt: Self.normalizedResetsAt(limit.resetsAt)
+            )
+        }
+        tiers.append(contentsOf: modelTiers.keys.sorted().compactMap { modelTiers[$0] })
 
         guard !tiers.isEmpty else {
-            return SubscriptionQuota.error(
+            return .error(
                 tool: toolLabel,
                 status: .valid,
                 message: "Claude Code usage response did not include quota windows.",
@@ -131,7 +296,7 @@ struct ClaudeUsageClient: Sendable {
             credentialMessage: nil,
             success: true,
             tiers: tiers,
-            extraUsage: nil,
+            extraUsage: usageResponse.extraUsage?.formatted,
             error: nil,
             queriedAt: now().millisecondsSince1970
         )
@@ -184,10 +349,45 @@ struct ClaudeUsageClient: Sendable {
 private struct ClaudeOAuthUsageResponse: Decodable {
     let fiveHour: ClaudeOAuthUsageWindow?
     let sevenDay: ClaudeOAuthUsageWindow?
+    /// `seven_day_<model>` keys, keyed by model name.
+    let modelWindows: [String: ClaudeOAuthUsageWindow]
+    let limits: [ClaudeOAuthLimit]
+    let extraUsage: ClaudeOAuthExtraUsage?
 
-    enum CodingKeys: String, CodingKey {
-        case fiveHour = "five_hour"
-        case sevenDay = "seven_day"
+    private struct DynamicKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    private static let modelWindowPrefix = "seven_day_"
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DynamicKey.self)
+
+        func window(_ key: String) -> ClaudeOAuthUsageWindow? {
+            guard let codingKey = DynamicKey(stringValue: key) else { return nil }
+            return try? container.decodeIfPresent(ClaudeOAuthUsageWindow.self, forKey: codingKey)
+        }
+
+        fiveHour = window("five_hour")
+        sevenDay = window("seven_day")
+
+        var windows: [String: ClaudeOAuthUsageWindow] = [:]
+        for key in container.allKeys where key.stringValue.hasPrefix(Self.modelWindowPrefix) {
+            guard let value = try? container.decodeIfPresent(ClaudeOAuthUsageWindow.self, forKey: key) else {
+                continue
+            }
+            windows[String(key.stringValue.dropFirst(Self.modelWindowPrefix.count))] = value
+        }
+        modelWindows = windows
+
+        limits = DynamicKey(stringValue: "limits")
+            .flatMap { try? container.decodeIfPresent([ClaudeOAuthLimit].self, forKey: $0) } ?? []
+        extraUsage = DynamicKey(stringValue: "extra_usage")
+            .flatMap { try? container.decodeIfPresent(ClaudeOAuthExtraUsage.self, forKey: $0) }
     }
 }
 
@@ -198,5 +398,61 @@ private struct ClaudeOAuthUsageWindow: Decodable {
     enum CodingKeys: String, CodingKey {
         case utilization
         case resetsAt = "resets_at"
+    }
+}
+
+private struct ClaudeOAuthLimit: Decodable {
+    struct Scope: Decodable {
+        struct Model: Decodable {
+            let id: String?
+            let displayName: String?
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case displayName = "display_name"
+            }
+        }
+
+        let model: Model?
+    }
+
+    let kind: String?
+    let percent: Double?
+    let resetsAt: String?
+    let scope: Scope?
+    let isActive: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case percent
+        case resetsAt = "resets_at"
+        case scope
+        case isActive = "is_active"
+    }
+}
+
+private struct ClaudeOAuthExtraUsage: Decodable {
+    let isEnabled: Bool?
+    /// Cents.
+    let monthlyLimit: Double?
+    /// Cents.
+    let usedCredits: Double?
+    let currency: String?
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled = "is_enabled"
+        case monthlyLimit = "monthly_limit"
+        case usedCredits = "used_credits"
+        case currency
+    }
+
+    var formatted: String? {
+        guard isEnabled == true, let monthlyLimit, let usedCredits else {
+            return nil
+        }
+
+        var format = FloatingPointFormatStyle<Double>.Currency(code: currency?.uppercased() ?? "USD")
+        format = format.precision(.fractionLength(2))
+        return "\((usedCredits / 100).formatted(format)) of \((monthlyLimit / 100).formatted(format))"
     }
 }

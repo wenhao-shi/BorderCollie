@@ -13,6 +13,7 @@ struct CodexUsageView: View {
     var body: some View {
         UsageTrackerView(
             title: "Codex",
+            icon: .codex,
             viewModel: viewModel,
             queryingTitle: "Querying Codex quota...",
             readyMessage: "Refresh to read Codex CLI OAuth credentials and query current usage.",

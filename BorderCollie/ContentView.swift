@@ -13,11 +13,11 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                Label("Codex", systemImage: "terminal")
+                sidebarLabel("Codex", icon: .codex)
                     .tag(SidebarSection.codex)
-                Label("Cursor", systemImage: "cursorarrow.rays")
+                sidebarLabel("Cursor", icon: .cursor)
                     .tag(SidebarSection.cursor)
-                Label("Claude Code", systemImage: "sparkles")
+                sidebarLabel("Claude Code", icon: .claudeCode)
                     .tag(SidebarSection.claudeCode)
             }
             .listStyle(.sidebar)
@@ -32,6 +32,15 @@ struct ContentView: View {
                 ClaudeUsageView()
             }
         }
+    }
+
+    private func sidebarLabel(_ title: String, icon: AgentIcon) -> some View {
+        HStack(spacing: 8) {
+            AgentIconView(icon: icon, size: 16)
+            Text(title)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 }
 

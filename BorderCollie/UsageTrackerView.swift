@@ -4,6 +4,7 @@ struct UsageTrackerView: View {
     @StateObject private var viewModel: UsageTrackerViewModel
 
     private let title: String
+    private let icon: AgentIcon
     private let queryingTitle: String
     private let readyMessage: String
     private let notFoundTitle: String
@@ -19,6 +20,7 @@ struct UsageTrackerView: View {
     @MainActor
     init(
         title: String,
+        icon: AgentIcon,
         viewModel: UsageTrackerViewModel,
         queryingTitle: String,
         readyMessage: String,
@@ -34,6 +36,7 @@ struct UsageTrackerView: View {
     ) {
         _viewModel = StateObject(wrappedValue: viewModel)
         self.title = title
+        self.icon = icon
         self.queryingTitle = queryingTitle
         self.readyMessage = readyMessage
         self.notFoundTitle = notFoundTitle
@@ -137,6 +140,12 @@ struct UsageTrackerView: View {
         VStack(alignment: .leading, spacing: 16) {
             usageRemainingSection(quota)
 
+            if let extraUsage = quota.extraUsage {
+                Label("Extra usage: \(extraUsage)", systemImage: "creditcard")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             if let queriedAt = quota.queriedAt {
                 Text("Updated at \(Date(timeIntervalSince1970: TimeInterval(queriedAt) / 1_000), style: .time)")
                     .font(.footnote)
@@ -146,53 +155,19 @@ struct UsageTrackerView: View {
     }
 
     private func usageRemainingSection(_ quota: SubscriptionQuota) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "gauge")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, alignment: .leading)
+        HStack(alignment: .center, spacing: 18) {
+            AgentIconView(icon: icon, size: 44)
 
-                Text("Usage remaining")
-                    .font(.title3)
-                    .fontWeight(.medium)
-            }
+            UsageLimitsGrid(limits: usageLimits(quota))
 
-            VStack(spacing: 8) {
-                ForEach(usageLimits(quota)) { limit in
-                    usageRemainingRow(limit)
-                }
-            }
-            .padding(.leading, 36)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: 520, alignment: .leading)
-        .padding(14)
+        .padding(16)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func usageRemainingRow(_ limit: UsageLimitDisplay) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 18) {
-                Text(limit.title)
-                    .font(.body)
-                    .fontWeight(.medium)
-
-                Spacer()
-
-                Text(limit.percentageText)
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(limit.tier == nil ? .tertiary : .secondary)
-
-                Text(limit.resetText() ?? "--")
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 72, alignment: .trailing)
-            }
-
-            ProgressView(value: limit.remainingPercentage, total: 100)
-                .controlSize(.small)
-        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title) usage remaining")
     }
 
     private func unavailableState(title: String, message: String) -> some View {
