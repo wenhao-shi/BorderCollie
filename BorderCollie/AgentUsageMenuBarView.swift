@@ -39,7 +39,7 @@ struct AgentUsageMenuBarView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Label("Usage remaining", systemImage: "gauge")
+            Label("Usage consumed", systemImage: "gauge")
                 .font(.headline)
 
             Spacer()

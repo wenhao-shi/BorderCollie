@@ -26,7 +26,7 @@ struct BorderCollieTests {
         )
     }
 
-    @Test func codexUsageLimitDisplayShowsRemainingUsageAndResetText() {
+    @Test func codexUsageLimitDisplayShowsUsedUsageAndResetText() {
         let quota = SubscriptionQuota(
             tool: "codex",
             credentialStatus: .valid,
@@ -49,7 +49,7 @@ struct BorderCollieTests {
         let utc = TimeZone(secondsFromGMT: 0)!
 
         #expect(limits.map(\.title) == ["5h", "7d"])
-        #expect(limits.map(\.percentageText) == ["20%", "60%"])
+        #expect(limits.map(\.percentageText) == ["80%", "40%"])
         // ICU uses a narrow no-break space (U+202F) before AM/PM.
         #expect(
             limits.map {
@@ -77,11 +77,11 @@ struct BorderCollieTests {
         let limits = CursorUsageLimitDisplay.usageLimits(from: quota)
 
         #expect(limits.map(\.title) == ["Auto + Composer", "API"])
-        #expect(limits.map(\.percentageText) == ["98.75%", "100%"])
+        #expect(limits.map(\.percentageText) == ["1.2%", "0%"])
         #expect(limits.map { $0.resetText(timeZone: TimeZone(secondsFromGMT: 0)!) } == ["Jul 30", "Jul 30"])
     }
 
-    @Test func codexCompactSummaryShowsRemainingUsage() {
+    @Test func codexCompactSummaryShowsUsedUsage() {
         let quota = SubscriptionQuota(
             tool: "codex",
             credentialStatus: .valid,
@@ -96,10 +96,10 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(CodexUsageLimitDisplay.compactSummary(from: quota) == "5h: 80% | 7d: 90%")
+        #expect(CodexUsageLimitDisplay.compactSummary(from: quota) == "5h: 20% | 7d: 10%")
     }
 
-    @Test func cursorCompactSummaryShowsRemainingUsage() {
+    @Test func cursorCompactSummaryShowsUsedUsage() {
         let quota = SubscriptionQuota(
             tool: "cursor",
             credentialStatus: .valid,
@@ -114,7 +114,7 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(CursorUsageLimitDisplay.compactSummary(from: quota) == "Auto: 95% | API: 60%")
+        #expect(CursorUsageLimitDisplay.compactSummary(from: quota) == "Auto: 5% | API: 40%")
     }
 
     @Test func compactSummaryHandlesMissingClampedAndRoundedTiers() {
@@ -144,9 +144,9 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(CodexUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
-        #expect(CursorUsageLimitDisplay.compactSummary(from: cursorQuota) == "Auto: 100% | API: 0%")
-        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
+        #expect(CodexUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 20% | 7d: --")
+        #expect(CursorUsageLimitDisplay.compactSummary(from: cursorQuota) == "Auto: 0% | API: 100%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 20% | 7d: --")
     }
 
     @Test func credentialParserRejectsNonChatGPTOAuthMode() {
@@ -316,8 +316,8 @@ struct BorderCollieTests {
         #expect(quota.queriedAt == 1_783_080_000_000)
         #expect(quota.extraUsage == "You've used 1% of your included usage")
         #expect(quota.tiers == [
-            QuotaTier(name: "cursor_auto_composer", utilization: 0.1375, resetsAt: "2026-07-30T03:12:17Z"),
-            QuotaTier(name: "cursor_api", utilization: 0, resetsAt: "2026-07-30T03:12:17Z"),
+            QuotaTier(name: "cursor_auto_composer", utilization: 0.1375, resetsAt: "2026-07-30T08:12:17Z"),
+            QuotaTier(name: "cursor_api", utilization: 0, resetsAt: "2026-07-30T08:12:17Z"),
         ])
 
         let request = await httpClient.lastRequest()
@@ -361,7 +361,7 @@ struct BorderCollieTests {
     }
 
 
-    @Test func claudeCompactSummaryShowsRemainingUsage() {
+    @Test func claudeCompactSummaryShowsUsedUsage() {
         let quota = SubscriptionQuota(
             tool: "claude_code",
             credentialStatus: .valid,
@@ -376,7 +376,7 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 52% | 7d: 36%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 48% | 7d: 64%")
     }
 
     @Test func claudeCredentialParserReadsValidOAuthToken() {
@@ -659,7 +659,7 @@ struct BorderCollieTests {
 
         #expect(await probe.maxRunningCount() == 3)
         #expect(viewModel.rows.map(\.title) == ["Codex", "Cursor", "Claude Code"])
-        #expect(viewModel.rows.map(\.detail) == ["5h: 80% | 7d: 90%", "Sign in required", "5h: 52% | 7d: 36%"])
+        #expect(viewModel.rows.map(\.detail) == ["5h: 20% | 7d: 10%", "Sign in required", "5h: 48% | 7d: 64%"])
         #expect(viewModel.rows.map(\.state) == [.success, .unavailable, .success])
     }
 
@@ -685,7 +685,7 @@ struct BorderCollieTests {
                 .codex(service: CountingUsageTrackingService(toolID: "codex", state: serviceState)),
             ],
             initialRows: [
-                MenuBarUsageRow(id: "codex", title: "Codex", icon: .codex, detail: "5h: 80% | 7d: 90%", state: .success),
+                MenuBarUsageRow(id: "codex", title: "Codex", icon: .codex, detail: "5h: 20% | 7d: 10%", state: .success),
             ]
         )
 
@@ -696,13 +696,13 @@ struct BorderCollieTests {
             await Task.yield()
         }
 
-        #expect(viewModel.rows.first?.detail == "5h: 80% | 7d: 90%")
+        #expect(viewModel.rows.first?.detail == "5h: 20% | 7d: 10%")
 
         await viewModel.refresh()
         await refreshTask.value
 
         #expect(await serviceState.callCount() == 1)
-        #expect(viewModel.rows.first?.detail == "5h: 75% | 7d: 85%")
+        #expect(viewModel.rows.first?.detail == "5h: 25% | 7d: 15%")
     }
 
     @MainActor
@@ -1085,7 +1085,7 @@ extension BorderCollieTests {
 
         let limits = await viewModel.rows.first?.limits ?? []
         #expect(limits.map(\.title) == ["5h", "7d"])
-        #expect(limits.map(\.percentageText) == ["52%", "36%"])
+        #expect(limits.map(\.percentageText) == ["48%", "64%"])
     }
 
     @Test func menuBarRowsHaveNoLimitsWhenQueryFails() async {

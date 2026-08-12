@@ -66,7 +66,7 @@ The script also handles two things `actool` does not resolve: the CSS-only `curr
 
 ## 3. Row layout
 
-Usage rows are now icon-left, usage-right. `UsageLimitsGrid` is shared by the main window and the menu-bar panel so the two surfaces cannot drift apart in wording or column alignment. Columns are label, remaining percentage, reset, with a progress bar spanning each row beneath.
+Usage rows are now icon-left, usage-right. `UsageLimitsGrid` is shared by the main window and the menu-bar panel so the two surfaces cannot drift apart in wording or column alignment. Columns are label, used percentage, reset, with a progress bar spanning each row beneath.
 
 In the menu-bar panel the agent name is carried only as an accessibility label — the icon identifies the agent. The panel widened from 320 to 360 points to fit the third column.
 
@@ -108,10 +108,3 @@ Compact summaries no longer carry a countdown. They now feed only the accessibil
 ### ICU narrow no-break space
 
 `DateFormatter` separates the time from AM/PM with U+202F (narrow no-break space), not the plain space a source literal carries. Assertions comparing formatted times must normalize it, or they fail while printing two identical-looking strings.
-
-### Known failing tests
-
-Two tests fail and are unrelated to this work. Both predate it, confirmed by stashing:
-
-- `cursorUsageLimitDisplayShowsMonthlyBuckets` — expects `98.75%`, but `percentageText` caps at one fraction digit and returns `98.8%`. The test contradicts the formatter.
-- `cursorUsageClientNormalizesCurrentPeriodUsageResponse` — expects `03:12:17Z`, gets `08:12:17Z`. The five-hour offset suggests `CursorUsageClient` converts the millisecond `billingCycleEnd` through a local timezone. This looks like a real bug, not a stale expectation, and is worth investigating.

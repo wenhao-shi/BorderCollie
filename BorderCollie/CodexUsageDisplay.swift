@@ -67,7 +67,7 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
     let title: String
     let tier: QuotaTier?
 
-    var remainingPercentage: Double { remainingPercentage(from: tier?.utilization) }
+    var usedPercentage: Double { usedPercentage(from: tier?.utilization) }
     var resetsAt: String? { tier?.resetsAt }
 
     var percentageText: String {
@@ -75,19 +75,19 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
             return "--"
         }
 
-        return "\(remainingPercentage.formatted(.number.precision(.fractionLength(0...1))))%"
+        return "\(usedPercentage.formatted(.number.precision(.fractionLength(0...1))))%"
     }
 
     func resetText(now: Date = Date(), timeZone: TimeZone = .current) -> String? {
         UsageResetFormatting.text(forResetsAt: resetsAt, now: now, timeZone: timeZone)
     }
 
-    private func remainingPercentage(from usedPercentage: Double?) -> Double {
-        guard let usedPercentage else {
+    private func usedPercentage(from utilization: Double?) -> Double {
+        guard let utilization else {
             return 0
         }
 
-        return min(max(100 - usedPercentage, 0), 100)
+        return min(max(utilization, 0), 100)
     }
 }
 
@@ -122,7 +122,7 @@ struct CodexUsageLimitDisplay: Identifiable, Equatable, Sendable {
 
     var id: String { kind.id }
     var title: String { kind.title }
-    var remainingPercentage: Double { remainingPercentage(from: tier?.utilization) }
+    var usedPercentage: Double { usedPercentage(from: tier?.utilization) }
     var resetsAt: String? { tier?.resetsAt }
 
     var percentageText: String {
@@ -130,7 +130,7 @@ struct CodexUsageLimitDisplay: Identifiable, Equatable, Sendable {
             return "--"
         }
 
-        return "\(remainingPercentage.formatted(.number.precision(.fractionLength(0...1))))%"
+        return "\(usedPercentage.formatted(.number.precision(.fractionLength(0...1))))%"
     }
 
     func resetText(now: Date = Date(), timeZone: TimeZone = .current) -> String? {
@@ -162,12 +162,12 @@ struct CodexUsageLimitDisplay: Identifiable, Equatable, Sendable {
             .joined(separator: " | ")
     }
 
-    private func remainingPercentage(from usedPercentage: Double?) -> Double {
-        guard let usedPercentage else {
+    private func usedPercentage(from utilization: Double?) -> Double {
+        guard let utilization else {
             return 0
         }
 
-        return min(max(100 - usedPercentage, 0), 100)
+        return min(max(utilization, 0), 100)
     }
 
 
@@ -179,8 +179,8 @@ enum CompactUsageDisplay {
             return "--"
         }
 
-        let remaining = min(max(100 - tier.utilization, 0), 100)
-        return "\(Int(remaining.rounded()))%"
+        let used = min(max(tier.utilization, 0), 100)
+        return "\(Int(used.rounded()))%"
     }
 
 }

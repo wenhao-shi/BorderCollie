@@ -2,7 +2,7 @@
 
 BorderCollie is a native macOS SwiftUI app for monitoring coding-agent usage
 limits from one local desktop surface. It currently tracks Codex, Cursor, and
-Claude Code, showing remaining usage in the main window and a compact menu-bar
+Claude Code, showing consumed usage in the main window and a compact menu-bar
 popup.
 
 The app is local-first by design. Provider credentials are read from
@@ -20,7 +20,7 @@ layers, and never passed into SwiftUI views.
 - Fixed 30-second auto refresh across tracker pages and the menu-bar popup.
 - Manual toolbar refresh in tracker pages.
 - Icon-only manual refresh in the menu-bar popup.
-- Usage remaining display, not usage consumed.
+- Usage consumed display for percentages and progress bars.
 - Static updated timestamp that changes only after a new query result.
 - Preview-safe SwiftUI surfaces that do not read credentials or call networks.
 - Swift Testing coverage for credential parsing, API normalization, display
@@ -45,7 +45,7 @@ The main window displays normalized 5-hour and weekly quota windows. The
 menu-bar compact format is:
 
 ```text
-5h: 80% | 7d: 90%
+5h: 20% | 7d: 10%
 ```
 
 ### Cursor
@@ -61,11 +61,11 @@ Credential lookup:
 1. `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`.
 2. `ItemTable` key `cursorAuth/accessToken`.
 
-The main window displays current monthly `Auto + Composer` and `API` remaining
+The main window displays current monthly `Auto + Composer` and `API` consumed
 usage. The menu-bar compact format is:
 
 ```text
-Auto: 95% | API: 60%
+Auto: 5% | API: 40%
 ```
 
 ## Architecture
@@ -96,7 +96,7 @@ Credential and API clients
 
 Provider responses are normalized into `SubscriptionQuota`. `QuotaTier`
 preserves provider-reported used percentage in `utilization`; display code
-converts it to remaining percentage with `100 - utilization`.
+clamps it to the `0...100` range before rendering it.
 
 ## Privacy And Security
 
@@ -174,8 +174,8 @@ docs/
 ## Development Notes
 
 - Keep provider credential lookup isolated from SwiftUI.
-- Store provider-reported used percentage in `QuotaTier.utilization`; convert to
-  remaining percentage only in display code.
+- Store provider-reported used percentage in `QuotaTier.utilization`; clamp and
+  render it as consumed usage in display code.
 - Keep auto refresh fixed at 30 seconds unless the product standard changes.
 - Keep previews deterministic and offline.
 - Add tests for new credential parsing, response normalization, display labels,

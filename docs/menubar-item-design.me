@@ -8,8 +8,7 @@ window, not a replacement for it.
 
 - Let the user check all tracked agent usage without opening or navigating the
   main window.
-- Preserve the app's existing usage semantics: show usage remaining, not usage
-  consumed.
+- Preserve the app's usage semantics: show usage consumed.
 - Keep the popup compact enough for frequent use from the menu bar.
 - Reuse the same credential, API, timeout, and display-normalization paths as
   the main tracker pages.
@@ -47,12 +46,12 @@ main window, or **Quit BorderCollie** / Cmd+Q to exit fully.
 
 The popup uses a single compact column:
 
-- Header: `Usage remaining` with a gauge icon.
+- Header: `Usage consumed` with a gauge icon.
 - Header action: icon-only refresh button using `arrow.clockwise`.
 - Body: one row per tracked agent, with the agent's brand icon on the left and
   its usage rows on the right. The agent name is carried only as an
   accessibility label, since the icon identifies it.
-- Each usage row shows label, remaining percentage, absolute reset time, and a
+- Each usage row shows label, used percentage, absolute reset time, and a
   progress bar.
 - Footer: `Show Window` and `Quit BorderCollie` actions for the hybrid
   menu-bar lifecycle.
@@ -63,7 +62,7 @@ accessibility label and help text of `Refresh`.
 Each row contains:
 
 - Agent name, such as `Codex`, `Cursor`, or `Claude Code`.
-- Compact remaining-usage summary.
+- Compact used-usage summary.
 
 Rows are ordered by product priority:
 
@@ -78,24 +77,24 @@ Compact summaries are provider-specific because the quota windows differ.
 Codex:
 
 ```text
-5h: 80% | 7d: 90%
+5h: 20% | 7d: 10%
 ```
 
 Cursor:
 
 ```text
-Auto: 95% | API: 60%
+Auto: 5% | API: 40%
 ```
 
 Claude Code:
 
 ```text
-5h: 52% | 7d: 36%
+5h: 48% | 7d: 64%
 ```
 
-Percentages are usage remaining. Provider-reported used percentage remains in
-`QuotaTier.utilization`; compact display code converts it to remaining
-percentage, clamps it to `0...100`, and rounds to a whole percentage.
+Percentages are usage consumed. Provider-reported used percentage remains in
+`QuotaTier.utilization`; compact display code clamps it to `0...100` and rounds
+it to a whole percentage.
 
 Missing compact tiers render as `--`.
 

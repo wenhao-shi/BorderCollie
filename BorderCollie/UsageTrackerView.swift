@@ -138,7 +138,7 @@ struct UsageTrackerView: View {
 
     private func quotaSuccessView(_ quota: SubscriptionQuota) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            usageRemainingSection(quota)
+            usageUsedSection(quota)
 
             if let extraUsage = quota.extraUsage {
                 Label("Extra usage: \(extraUsage)", systemImage: "creditcard")
@@ -154,7 +154,7 @@ struct UsageTrackerView: View {
         }
     }
 
-    private func usageRemainingSection(_ quota: SubscriptionQuota) -> some View {
+    private func usageUsedSection(_ quota: SubscriptionQuota) -> some View {
         HStack(alignment: .center, spacing: 18) {
             AgentIconView(icon: icon, size: 44)
 
@@ -167,7 +167,7 @@ struct UsageTrackerView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(title) usage remaining")
+        .accessibilityLabel("\(title) usage consumed")
     }
 
     private func unavailableState(title: String, message: String) -> some View {
