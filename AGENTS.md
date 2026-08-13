@@ -58,9 +58,30 @@
 - `BorderCollie/CursorUsageDisplay.swift`: Cursor monthly usage row labels.
 - `BorderCollie/ClaudeUsageDisplay.swift`: Claude Code session/weekly usage
   row labels.
+- `BorderCollie/UsageDashboard/UsageAnalyticsModels.swift`: canonical historical
+  token, pricing, coverage, and aggregate models.
+- `BorderCollie/UsageDashboard/UsageAnalyticsStore.swift`: actor-isolated local
+  SQLite schema, transactions, checkpoints, and range reads.
+- `BorderCollie/UsageDashboard/UsageImporters.swift`: incremental Claude Code,
+  Codex, OpenCode, and Pi history importers.
+- `BorderCollie/UsageDashboard/UsagePricing.swift`: model aliases and
+  effective-dated official token pricing.
+- `BorderCollie/UsageDashboard/UsageAnalyticsBackend.swift`: import, repricing,
+  local-calendar filtering, and aggregation coordinator.
+- `BorderCollie/UsageDashboard/UsageDashboardModel.swift`: main-actor dashboard
+  refresh, filter loading, error preservation, and preview state.
+- `BorderCollie/UsageDashboard/UsageDashboardView.swift`: aggregate Usage
+  destination, 24h/7d/30d controls, summary, coverage states, and composition.
+- `BorderCollie/UsageDashboard/UsageDailyChart.swift`: hourly/daily token/cost
+  chart, hover guides, and toggleable agent legend.
+- `BorderCollie/UsageDashboard/UsageMetricStrip.swift`: normalized token, cost,
+  input-cache-hit, and output-share metrics.
+- `BorderCollie/UsageDashboard/UsageBreakdownTable.swift`: model/day usage table.
 - `docs/tracker_design.md`: design guide for adding future usage trackers.
 - `docs/menubar-item-design.me`: design contract for the menu-bar companion
   surface.
+- `docs/usage-dashboard-design.md`: historical accounting and privacy contract.
+- `docs/usage-dashboard-plan.md`: backend-first delivery and validation gates.
 
 ## Common Commands
 
@@ -90,6 +111,27 @@ are prepared for the app UI to launch.
 - Keep updated time static until the next refresh.
 - Do not show auth implementation details in the happy path.
 - Disable live refresh/network behavior in previews.
+
+## Historical Usage Backend Standard
+
+- Keep historical analytics separate from `SubscriptionQuota` and quota polling.
+- Track Claude Code, Codex, OpenCode, and Pi; Cursor is not a historical source.
+- Preserve disjoint `in`, `cache-write`, `cache-read`, and `out` buckets;
+  reasoning is a subset of `out`.
+- Store partial events but exclude them from complete-token and cost totals.
+- Commit imported events and checkpoints atomically in `UsageAnalyticsStore`.
+- Keep source paths hashed and never persist prompts, responses, tool content,
+  credentials, or raw JSON records.
+- Price only with effective-dated official first-party rules. Unknown gateway
+  models remain unpriced, and source-reported cost remains separate.
+- Historical refresh is user/screen driven and does not join the 30-second quota loop.
+- The Usage screen uses an exact rolling 24-hour period plus local-calendar
+  7-day and 30-day periods, and keeps filter state window-scoped with
+  `@SceneStorage`.
+- Dashboard previews must inject synthetic aggregates and never open the live
+  analytics store or scan agent histories.
+- Read `docs/usage-dashboard-design.md` before changing import, pricing, or
+  aggregation semantics.
 
 ## Common Errors And Pitfalls
 

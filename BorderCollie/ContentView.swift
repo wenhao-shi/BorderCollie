@@ -8,11 +8,13 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var selection: SidebarSection? = .codex
+    @State private var selection: SidebarSection? = .usage
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
+                Label("Usage", systemImage: "chart.xyaxis.line")
+                    .tag(SidebarSection.usage)
                 sidebarLabel("Codex", icon: .codex)
                     .tag(SidebarSection.codex)
                 sidebarLabel("Cursor", icon: .cursor)
@@ -23,7 +25,9 @@ struct ContentView: View {
             .listStyle(.sidebar)
             .navigationTitle("BorderCollie")
         } detail: {
-            switch selection ?? .codex {
+            switch selection ?? .usage {
+            case .usage:
+                UsageDashboardView()
             case .codex:
                 CodexUsageView()
             case .cursor:
@@ -45,6 +49,7 @@ struct ContentView: View {
 }
 
 private enum SidebarSection: String, Identifiable {
+    case usage
     case codex
     case cursor
     case claudeCode

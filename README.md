@@ -25,6 +25,9 @@ layers, and never passed into SwiftUI views.
 - Preview-safe SwiftUI surfaces that do not read credentials or call networks.
 - Swift Testing coverage for credential parsing, API normalization, display
   formatting, compact menu-bar summaries, and failure mapping.
+- A local historical usage dashboard for Claude Code, Codex, OpenCode, and Pi
+  with rolling 24-hour, 7-day, and 30-day periods, hourly/daily token and cost
+  charts, normalized metrics, and detailed model/day token breakdowns.
 
 ## Supported Trackers
 
@@ -92,6 +95,17 @@ Credential and API clients
   CodexUsageClient
   CursorCredentialResolver
   CursorUsageClient
+
+Historical analytics backend (separate from subscription quota)
+  UsageAnalyticsBackend
+  UsageAnalyticsStore
+  ClaudeCodeUsageImporter / CodexUsageImporter
+  OpenCodeUsageImporter / PiUsageImporter
+  UsagePricingEngine / UsageAggregator
+
+Historical analytics UI
+  UsageDashboardModel / UsageDashboardView
+  UsageDailyChart / UsageMetricStrip / UsageBreakdownTable
 ```
 
 Provider responses are normalized into `SubscriptionQuota`. `QuotaTier`
@@ -155,11 +169,15 @@ BorderCollie/
   UsageTrackingService.swift     Shared service and HTTP protocols
   Codex*.swift                   Codex credential, API, display, and view code
   Cursor*.swift                  Cursor credential, API, display, and view code
+  UsageDashboard/                Historical import, pricing, aggregation, and UI
 BorderCollieTests/
   BorderCollieTests.swift        Swift Testing coverage
+  UsageDashboardTests.swift      Synthetic historical-backend coverage
 docs/
   tracker_design.md              Architecture guide for adding trackers
   menubar-item-design.me         Menu-bar item interaction and UI design
+  usage-dashboard-design.md      Historical accounting contract
+  usage-dashboard-plan.md        Staged dashboard delivery plan
 ```
 
 ## Documentation
@@ -170,6 +188,10 @@ docs/
   compact row behavior, visual layout, and implementation contract.
 - [Codex usage query report](docs/cc-switch-codex-usage-query-report.md):
   reference notes for the Codex usage API lineage.
+- [Historical usage dashboard design](docs/usage-dashboard-design.md): local
+  source contracts, normalization, privacy, pricing, and aggregation.
+- [Historical usage dashboard plan](docs/usage-dashboard-plan.md): backend-first
+  implementation gates followed by the deferred UI stage.
 
 ## Development Notes
 

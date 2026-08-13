@@ -9,6 +9,11 @@ credential and API details.
 For detailed menu-bar interaction and visual rules, read
 `docs/menubar-item-design.me`.
 
+Historical token and API-equivalent cost analytics are a separate feature with
+a different data model and refresh lifecycle. Read
+`docs/usage-dashboard-design.md` and `docs/usage-dashboard-plan.md` before
+changing or implementing that dashboard.
+
 ## Goals
 
 - Show usage consumed for each supported coding agent.
