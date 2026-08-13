@@ -2,6 +2,9 @@ import Charts
 import SwiftUI
 
 struct UsageDailyChart: View {
+    private static let tooltipSize = CGSize(width: 160, height: 68)
+    private static let tooltipSpacing: CGFloat = 8
+
     let aggregate: UsageAggregate
     let range: UsageDateRange
     @Binding var metric: UsageChartMetric
@@ -40,11 +43,11 @@ struct UsageDailyChart: View {
                 Chart {
                     ForEach(chartAgents, id: \.self) { agent in
                         if enabledAgents.contains(agent) {
-                            ForEach(points(for: agent)) { point in
+                            ForEach(renderedPoints(for: agent)) { point in
                                 AreaMark(
-                                    x: .value("Time", point.timestamp),
+                                    x: .value("Time", point.date),
                                     yStart: .value("Baseline", 0.0),
-                                    yEnd: .value(metric.label, value(for: point)),
+                                    yEnd: .value(metric.label, point.value),
                                     series: .value("Agent", agent.displayName)
                                 )
                                 .foregroundStyle(
@@ -54,20 +57,20 @@ struct UsageDailyChart: View {
                                         endPoint: .bottom
                                     )
                                 )
-                                .interpolationMethod(.monotone)
+                                .interpolationMethod(.linear)
 
                                 LineMark(
-                                    x: .value("Time", point.timestamp),
-                                    y: .value(metric.label, value(for: point)),
+                                    x: .value("Time", point.date),
+                                    y: .value(metric.label, point.value),
                                     series: .value("Agent", agent.displayName)
                                 )
                                 .foregroundStyle(agent.chartColor)
                                 .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                                .interpolationMethod(.monotone)
+                                .interpolationMethod(.linear)
                                 .accessibilityLabel(
-                                    "\(agent.displayName), \(timestampText(point.timestamp)), \(metric.label.lowercased())"
+                                    "\(agent.displayName), \(timestampText(point.date)), \(metric.label.lowercased())"
                                 )
-                                .accessibilityValue(accessibilityValue(for: point))
+                                .accessibilityValue(axisLabel(point.value))
                             }
                         }
                     }
@@ -87,9 +90,6 @@ struct UsageDailyChart: View {
                         )
                         .foregroundStyle(hoverSelection.agent.chartColor)
                         .symbolSize(55)
-                        .annotation(position: .top, spacing: 8) {
-                            hoverAnnotation(for: hoverSelection)
-                        }
                     }
                 }
                 .chartLegend(.hidden)
@@ -127,12 +127,25 @@ struct UsageDailyChart: View {
                 }
                 .chartOverlay { proxy in
                     GeometryReader { geometry in
-                        Rectangle()
-                            .fill(.clear)
-                            .contentShape(Rectangle())
-                            .onContinuousHover { phase in
-                                updateHover(phase, proxy: proxy, geometry: geometry)
+                        ZStack(alignment: .topLeading) {
+                            Rectangle()
+                                .fill(.clear)
+                                .contentShape(Rectangle())
+                                .onContinuousHover { phase in
+                                    updateHover(phase, proxy: proxy, geometry: geometry)
+                                }
+
+                            if let hoverSelection,
+                               let position = tooltipPosition(
+                                   for: hoverSelection,
+                                   proxy: proxy,
+                                   geometry: geometry
+                               ) {
+                                hoverAnnotation(for: hoverSelection)
+                                    .position(position)
+                                    .allowsHitTesting(false)
                             }
+                        }
                     }
                 }
                 .frame(minHeight: 290)
@@ -190,6 +203,14 @@ struct UsageDailyChart: View {
         aggregate.chartPoints.filter { $0.agent == agent }
     }
 
+    private func renderedPoints(for agent: UsageAgent) -> [UsageChartCurvePoint] {
+        UsageChartCurve.samples(
+            points: points(for: agent).map {
+                UsageChartCurvePoint(date: $0.timestamp, value: value(for: $0))
+            }
+        )
+    }
+
     private var chartEnd: Date {
         max(aggregate.interval.start.addingTimeInterval(1), aggregate.interval.end.addingTimeInterval(-1))
     }
@@ -232,11 +253,11 @@ struct UsageDailyChart: View {
         let pointer = CGPoint(x: location.x - plotFrame.minX, y: location.y - plotFrame.minY)
         let series = chartAgents.compactMap { agent -> UsageChartScreenSeries? in
             guard enabledAgents.contains(agent) else { return nil }
-            let screenPoints = points(for: agent).compactMap { point -> UsageChartScreenPoint? in
-                guard let position = proxy.position(for: (x: point.timestamp, y: value(for: point))) else {
+            let screenPoints = renderedPoints(for: agent).compactMap { point -> UsageChartScreenPoint? in
+                guard let position = proxy.position(for: (x: point.date, y: point.value)) else {
                     return nil
                 }
-                return UsageChartScreenPoint(date: point.timestamp, value: value(for: point), position: position)
+                return UsageChartScreenPoint(date: point.date, value: point.value, position: position)
             }
             guard !screenPoints.isEmpty else { return nil }
             return UsageChartScreenSeries(agent: agent, points: screenPoints)
@@ -259,19 +280,52 @@ struct UsageDailyChart: View {
             Text(axisLabel(selection.value))
                 .font(.caption.monospacedDigit())
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .lineLimit(1)
+        .padding(.horizontal, 10)
+        .frame(
+            width: Self.tooltipSize.width,
+            height: Self.tooltipSize.height,
+            alignment: .leading
+        )
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
     }
 
-    private func accessibilityValue(for point: UsageChartPoint) -> String {
-        switch metric {
-        case .cost:
-            let suffix = point.pricedEvents < point.completeEvents ? ", partial pricing coverage" : ""
-            return UsageDashboardFormatting.currency(nanodollars: point.estimatedCostNanodollars) + suffix
-        case .tokens:
-            return "\(point.totalTokens.formatted()) tokens"
+    private func tooltipPosition(
+        for selection: UsageChartHoverSelection,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) -> CGPoint? {
+        guard let plotFrameAnchor = proxy.plotFrame,
+              let plotPosition = proxy.position(for: (x: selection.date, y: selection.value))
+        else {
+            return nil
         }
+
+        let plotFrame = geometry[plotFrameAnchor]
+        let point = CGPoint(
+            x: plotFrame.minX + plotPosition.x,
+            y: plotFrame.minY + plotPosition.y
+        )
+        let halfWidth = Self.tooltipSize.width / 2
+        let halfHeight = Self.tooltipSize.height / 2
+        let minimumX = plotFrame.minX + halfWidth
+        let maximumX = plotFrame.maxX - halfWidth
+        let x = minimumX <= maximumX
+            ? min(max(point.x, minimumX), maximumX)
+            : plotFrame.midX
+
+        let preferredAbove = point.y - Self.tooltipSpacing - halfHeight
+        let preferredBelow = point.y + Self.tooltipSpacing + halfHeight
+        let y: CGFloat
+        if preferredAbove >= plotFrame.minY {
+            y = preferredAbove
+        } else if preferredBelow <= plotFrame.maxY {
+            y = preferredBelow
+        } else {
+            y = plotFrame.midY
+        }
+
+        return CGPoint(x: x, y: y)
     }
 
     private func timestampText(_ date: Date) -> String {

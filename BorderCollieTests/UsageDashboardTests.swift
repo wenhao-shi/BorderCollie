@@ -400,6 +400,66 @@ struct UsageDashboardTests {
         )
         #expect(selection == UsageChartHoverSelection(agent: .pi, date: date, value: 42))
     }
+
+    @Test func chartCurveSamplingPreservesAnchorsAndMonotonicBounds() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let points = [
+            UsageChartCurvePoint(date: start, value: 10),
+            UsageChartCurvePoint(date: start.addingTimeInterval(10), value: 30),
+            UsageChartCurvePoint(date: start.addingTimeInterval(20), value: 20),
+        ]
+
+        let samples = UsageChartCurve.samples(points: points, subdivisions: 4)
+
+        #expect(samples.count == 9)
+        #expect(samples[0] == points[0])
+        #expect(samples[4] == points[1])
+        #expect(samples[8] == points[2])
+        #expect(samples[0...4].allSatisfy { (10...30).contains($0.value) })
+        #expect(samples[4...8].allSatisfy { (20...30).contains($0.value) })
+    }
+
+    @Test func chartHoverProjectionStaysOnTheRenderedSampledCurve() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let curve = UsageChartCurve.samples(
+            points: [
+                UsageChartCurvePoint(date: start, value: 0),
+                UsageChartCurvePoint(date: start.addingTimeInterval(10), value: 40),
+                UsageChartCurvePoint(date: start.addingTimeInterval(20), value: 10),
+            ],
+            subdivisions: 4
+        )
+        let screenPoints = curve.map {
+            UsageChartScreenPoint(
+                date: $0.date,
+                value: $0.value,
+                position: CGPoint(
+                    x: $0.date.timeIntervalSince(start),
+                    y: $0.value
+                )
+            )
+        }
+
+        let selection = try #require(
+            UsageChartInteraction.nearestSelection(
+                to: CGPoint(x: 6.25, y: 34),
+                series: [UsageChartScreenSeries(agent: .codex, points: screenPoints)],
+                maximumDistance: 10
+            )
+        )
+        let segment = try #require(
+            zip(curve, curve.dropFirst()).first {
+                $0.0.date <= selection.date && selection.date <= $0.1.date
+            }
+        )
+        let segmentStart = segment.0
+        let segmentEnd = segment.1
+        let fraction = selection.date.timeIntervalSince(segmentStart.date) /
+            segmentEnd.date.timeIntervalSince(segmentStart.date)
+        let expectedValue = segmentStart.value + (segmentEnd.value - segmentStart.value) * fraction
+
+        #expect(abs(selection.value - expectedValue) < 0.000_001)
+    }
 }
 
 private func makeEvent(
