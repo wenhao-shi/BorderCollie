@@ -77,6 +77,14 @@
 - `BorderCollie/UsageDashboard/UsageMetricStrip.swift`: normalized token, cost,
   input-cache-hit, and output-share metrics.
 - `BorderCollie/UsageDashboard/UsageBreakdownTable.swift`: model/day usage table.
+- `BorderCollie/UsageDashboard/UsageEvaluationModels.swift`: evaluation run,
+  session, active-turn, timing-quality, and report models.
+- `BorderCollie/UsageDashboard/UsageEvaluationBackend.swift`: evaluation
+  persistence coordination, session discovery, and overlap-aware aggregation.
+- `BorderCollie/UsageDashboard/EvaluationRunsModel.swift`: main-actor evaluation
+  list, refresh, selection, and Start/Stop lifecycle.
+- `BorderCollie/UsageDashboard/EvaluationRunsView.swift`: Evaluation Runs split
+  view, past-range creation, session selection, and report breakdowns.
 - `docs/tracker_design.md`: design guide for adding future usage trackers.
 - `docs/menubar-item-design.me`: design contract for the menu-bar companion
   surface.
@@ -130,6 +138,14 @@ are prepared for the app UI to launch.
   `@SceneStorage`.
 - Dashboard previews must inject synthetic aggregates and never open the live
   analytics store or scan agent histories.
+- Evaluation Runs scope historical usage by explicit time interval and hashed
+  session key; they do not include subscription-quota utilization.
+- Active time spans human submission through terminal agent completion,
+  including tools and waits but excluding the following human idle gap.
+- Codex/OpenCode timing is exact from explicit source markers; Claude Code/Pi
+  timing is inferred from message boundaries and must stay labeled as inferred.
+- Merge overlapping intervals within each session before adding Agent time;
+  union all selected-session intervals for Effective wall time.
 - Read `docs/usage-dashboard-design.md` before changing import, pricing, or
   aggregation semantics.
 

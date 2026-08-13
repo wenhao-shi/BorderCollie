@@ -86,9 +86,35 @@ enum UsageImporterError: Error, Equatable {
     case invalidUTF8
 }
 
+private struct PendingActiveTurn: Codable, Sendable {
+    let sourceID: String
+    let startedAtMilliseconds: Int64
+}
+
+private struct JSONLImporterState: Codable, Sendable {
+    var currentModel: String? = nil
+    var pendingTurn: PendingActiveTurn? = nil
+}
+
+private enum JSONLImporterStateCodec {
+    static func decode(_ value: String?) -> JSONLImporterState {
+        guard let value, let data = value.data(using: .utf8),
+              let state = try? JSONDecoder().decode(JSONLImporterState.self, from: data)
+        else {
+            return JSONLImporterState()
+        }
+        return state
+    }
+
+    static func encode(_ state: JSONLImporterState) -> String? {
+        guard let data = try? JSONEncoder().encode(state) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
 struct ClaudeCodeUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.claudeCode
-    let importerVersion = 1
+    let importerVersion = 2
     let projectsRoot: URL
 
     init(projectsRoot: URL = UsageSourceLocations.claudeProjects()) {
@@ -108,14 +134,22 @@ struct ClaudeCodeUsageImporter: UsageSourceImporter {
 
         for source in sources {
             if source.resetRequired { batch.resetSourceKeys.insert(source.sourceKey) }
+            var state = JSONLImporterStateCodec.decode(source.priorHighWatermark)
             let read = try JSONLIncrementalReader.read(url: source.url, from: source.startOffset)
             for record in read.records {
                 do {
                     let object = try JSONLImportEngine.object(from: record)
-                    guard let event = try parse(object: object, sourceKey: source.sourceKey, offset: record.byteOffset) else {
-                        continue
+                    if let turn = try parseTiming(
+                        object: object,
+                        sourceKey: source.sourceKey,
+                        offset: record.byteOffset,
+                        state: &state
+                    ) {
+                        batch.activeTurns.append(turn)
                     }
-                    eventsByID[event.id] = event
+                    if let event = try parse(object: object, sourceKey: source.sourceKey, offset: record.byteOffset) {
+                        eventsByID[event.id] = event
+                    }
                 } catch {
                     batch.issues.append(issue(agent: agent, sourceKey: source.sourceKey, offset: record.byteOffset, error: error))
                 }
@@ -124,13 +158,77 @@ struct ClaudeCodeUsageImporter: UsageSourceImporter {
                 agent: agent,
                 source: source,
                 nextByteOffset: read.nextByteOffset,
-                highWatermark: nil,
+                highWatermark: JSONLImporterStateCodec.encode(state),
                 importerVersion: importerVersion
             ))
         }
 
         batch.events = Array(eventsByID.values)
         return batch
+    }
+
+    private func parseTiming(
+        object: [String: Any],
+        sourceKey: String,
+        offset: Int64,
+        state: inout JSONLImporterState
+    ) throws -> UsageActiveTurn? {
+        if isHumanClaudeMessage(object), state.pendingTurn == nil {
+            let message = object.dictionary("message") ?? [:]
+            let startedAt = try timestampMilliseconds(object: object, fallback: message)
+            let identity = object.string("uuid") ?? message.string("id") ?? "offset:\(offset)"
+            state.pendingTurn = PendingActiveTurn(
+                sourceID: UsageSourceIdentity.eventID("\(sourceKey)|turn|\(identity)"),
+                startedAtMilliseconds: startedAt
+            )
+            return nil
+        }
+
+        guard object.string("type") == "assistant",
+              let message = object.dictionary("message"),
+              let stopReason = message.string("stop_reason"),
+              stopReason != "tool_use",
+              let pending = state.pendingTurn
+        else {
+            return nil
+        }
+
+        let endedAt = try timestampMilliseconds(object: object, fallback: message)
+        let rawModel = message.string("model") ?? state.currentModel ?? "unknown"
+        state.pendingTurn = nil
+        state.currentModel = rawModel
+        return try UsageActiveTurn.normalized(
+            agent: agent,
+            sessionKey: sourceKey,
+            pricingAuthority: .anthropic,
+            rawModelID: rawModel,
+            canonicalModelID: UsageModelCatalog.canonicalModelID(
+                authority: .anthropic,
+                rawModelID: rawModel,
+                occurredAtMilliseconds: pending.startedAtMilliseconds
+            ),
+            startedAtMilliseconds: pending.startedAtMilliseconds,
+            endedAtMilliseconds: endedAt,
+            timingQuality: .inferred,
+            sourceKey: sourceKey,
+            sourceID: pending.sourceID,
+            importerVersion: importerVersion
+        )
+    }
+
+    private func isHumanClaudeMessage(_ object: [String: Any]) -> Bool {
+        guard object.string("type") == "user", object.bool("isMeta") != true,
+              let message = object.dictionary("message")
+        else {
+            return false
+        }
+        if message["content"] is String { return true }
+        guard let content = message.array("content") else { return false }
+        let humanKinds: Set<String> = ["text", "image", "document"]
+        return content.contains { value in
+            guard let item = value as? [String: Any], let type = item.string("type") else { return false }
+            return humanKinds.contains(type)
+        }
     }
 
     private func parse(object: [String: Any], sourceKey: String, offset: Int64) throws -> UsageEvent? {
@@ -184,7 +282,7 @@ struct ClaudeCodeUsageImporter: UsageSourceImporter {
 
 struct CodexUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.codex
-    let importerVersion = 1
+    let importerVersion = 2
     let sessionsRoot: URL
 
     init(sessionsRoot: URL = UsageSourceLocations.codexSessions()) {
@@ -203,19 +301,27 @@ struct CodexUsageImporter: UsageSourceImporter {
 
         for source in sources {
             if source.resetRequired { batch.resetSourceKeys.insert(source.sourceKey) }
-            var currentModel = source.priorHighWatermark
+            var state = JSONLImporterStateCodec.decode(source.priorHighWatermark)
             let read = try JSONLIncrementalReader.read(url: source.url, from: source.startOffset)
             for record in read.records {
                 do {
                     let object = try JSONLImportEngine.object(from: record)
                     if object.string("type") == "turn_context",
                        let model = object.dictionary("payload")?.string("model") {
-                        currentModel = model
+                        state.currentModel = model
                         continue
+                    }
+                    if let turn = try parseTiming(
+                        object: object,
+                        sourceKey: source.sourceKey,
+                        offset: record.byteOffset,
+                        state: &state
+                    ) {
+                        batch.activeTurns.append(turn)
                     }
                     guard let event = try parse(
                         object: object,
-                        model: currentModel,
+                        model: state.currentModel,
                         sourceKey: source.sourceKey,
                         offset: record.byteOffset
                     ) else { continue }
@@ -228,11 +334,57 @@ struct CodexUsageImporter: UsageSourceImporter {
                 agent: agent,
                 source: source,
                 nextByteOffset: read.nextByteOffset,
-                highWatermark: currentModel,
+                highWatermark: JSONLImporterStateCodec.encode(state),
                 importerVersion: importerVersion
             ))
         }
         return batch
+    }
+
+    private func parseTiming(
+        object: [String: Any],
+        sourceKey: String,
+        offset: Int64,
+        state: inout JSONLImporterState
+    ) throws -> UsageActiveTurn? {
+        guard object.string("type") == "event_msg",
+              let payload = object.dictionary("payload"),
+              let type = payload.string("type")
+        else {
+            return nil
+        }
+
+        if type == "task_started" {
+            state.pendingTurn = PendingActiveTurn(
+                sourceID: UsageSourceIdentity.eventID("\(sourceKey)|turn|\(offset)"),
+                startedAtMilliseconds: try timestampMilliseconds(object: object, fallback: payload)
+            )
+            return nil
+        }
+
+        guard type == "task_complete", let pending = state.pendingTurn else {
+            return nil
+        }
+        let endedAt = try timestampMilliseconds(object: object, fallback: payload)
+        let rawModel = state.currentModel ?? "unknown"
+        state.pendingTurn = nil
+        return try UsageActiveTurn.normalized(
+            agent: agent,
+            sessionKey: sourceKey,
+            pricingAuthority: .openAI,
+            rawModelID: rawModel,
+            canonicalModelID: UsageModelCatalog.canonicalModelID(
+                authority: .openAI,
+                rawModelID: rawModel,
+                occurredAtMilliseconds: pending.startedAtMilliseconds
+            ),
+            startedAtMilliseconds: pending.startedAtMilliseconds,
+            endedAtMilliseconds: endedAt,
+            timingQuality: .exact,
+            sourceKey: sourceKey,
+            sourceID: pending.sourceID,
+            importerVersion: importerVersion
+        )
     }
 
     private func parse(
@@ -293,7 +445,7 @@ struct CodexUsageImporter: UsageSourceImporter {
 
 struct PiUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.pi
-    let importerVersion = 1
+    let importerVersion = 2
     let sessionsRoot: URL
 
     init(sessionsRoot: URL = UsageSourceLocations.piSessions()) {
@@ -312,14 +464,22 @@ struct PiUsageImporter: UsageSourceImporter {
 
         for source in sources {
             if source.resetRequired { batch.resetSourceKeys.insert(source.sourceKey) }
+            var state = JSONLImporterStateCodec.decode(source.priorHighWatermark)
             let read = try JSONLIncrementalReader.read(url: source.url, from: source.startOffset)
             for record in read.records {
                 do {
                     let object = try JSONLImportEngine.object(from: record)
-                    guard let event = try parse(object: object, sourceKey: source.sourceKey, offset: record.byteOffset) else {
-                        continue
+                    if let turn = try parseTiming(
+                        object: object,
+                        sourceKey: source.sourceKey,
+                        offset: record.byteOffset,
+                        state: &state
+                    ) {
+                        batch.activeTurns.append(turn)
                     }
-                    batch.events.append(event)
+                    if let event = try parse(object: object, sourceKey: source.sourceKey, offset: record.byteOffset) {
+                        batch.events.append(event)
+                    }
                 } catch {
                     batch.issues.append(issue(agent: agent, sourceKey: source.sourceKey, offset: record.byteOffset, error: error))
                 }
@@ -328,11 +488,71 @@ struct PiUsageImporter: UsageSourceImporter {
                 agent: agent,
                 source: source,
                 nextByteOffset: read.nextByteOffset,
-                highWatermark: nil,
+                highWatermark: JSONLImporterStateCodec.encode(state),
                 importerVersion: importerVersion
             ))
         }
         return batch
+    }
+
+    private func parseTiming(
+        object: [String: Any],
+        sourceKey: String,
+        offset: Int64,
+        state: inout JSONLImporterState
+    ) throws -> UsageActiveTurn? {
+        guard object.string("type") == "message",
+              let message = object.dictionary("message"),
+              let role = message.string("role")
+        else {
+            return nil
+        }
+
+        if role == "user", state.pendingTurn == nil {
+            let startedAt: Int64
+            if let value = message.int64("timestamp") {
+                startedAt = normalizedEpochMilliseconds(value)
+            } else {
+                startedAt = try timestampMilliseconds(object: object, fallback: message)
+            }
+            let identity = object.string("id") ?? "offset:\(offset)"
+            state.pendingTurn = PendingActiveTurn(
+                sourceID: UsageSourceIdentity.eventID("\(sourceKey)|turn|\(identity)"),
+                startedAtMilliseconds: startedAt
+            )
+            return nil
+        }
+
+        guard role == "assistant",
+              message.string("stopReason") != "toolUse",
+              let pending = state.pendingTurn
+        else {
+            return nil
+        }
+
+        let endedAt = try timestampMilliseconds(object: object, fallback: message)
+        let provider = message.string("provider") ?? object.string("provider")
+        let authority = UsageModelCatalog.authority(rawProviderID: provider)
+        let rawModel = message.string("model") ?? object.string("model") ?? state.currentModel ?? "unknown"
+        state.pendingTurn = nil
+        state.currentModel = rawModel
+        return try UsageActiveTurn.normalized(
+            agent: agent,
+            sessionKey: sourceKey,
+            pricingAuthority: authority,
+            rawModelID: rawModel,
+            canonicalModelID: UsageModelCatalog.canonicalModelID(
+                authority: authority,
+                rawModelID: rawModel,
+                occurredAtMilliseconds: pending.startedAtMilliseconds
+            ),
+            startedAtMilliseconds: pending.startedAtMilliseconds,
+            endedAtMilliseconds: endedAt,
+            timingQuality: .inferred,
+            sourceKey: sourceKey,
+            sourceID: pending.sourceID,
+            importerVersion: importerVersion
+        )
     }
 
     private func parse(object: [String: Any], sourceKey: String, offset: Int64) throws -> UsageEvent? {
@@ -375,7 +595,7 @@ struct PiUsageImporter: UsageSourceImporter {
 
 struct OpenCodeUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.openCode
-    let importerVersion = 1
+    let importerVersion = 2
     let databaseURL: URL
 
     init(databaseURL: URL = UsageSourceLocations.openCodeDatabase()) {
@@ -413,7 +633,7 @@ struct OpenCodeUsageImporter: UsageSourceImporter {
         defer { sqlite3_close(database) }
 
         let sql = """
-        SELECT id, time_created, time_updated, data
+        SELECT id, session_id, time_created, time_updated, data
         FROM message
         WHERE (?1 IS NULL OR time_updated >= CAST(?1 AS INTEGER))
         ORDER BY time_updated, id
@@ -434,12 +654,15 @@ struct OpenCodeUsageImporter: UsageSourceImporter {
             let result = sqlite3_step(statement)
             if result == SQLITE_DONE { break }
             guard result == SQLITE_ROW else { throw UsageImporterError.sqliteStep(sqliteMessage(database)) }
-            guard let id = sqliteText(statement, 0), let dataText = sqliteText(statement, 3) else {
+            guard let id = sqliteText(statement, 0),
+                  let sessionID = sqliteText(statement, 1),
+                  let dataText = sqliteText(statement, 4)
+            else {
                 batch.issues.append(UsageImportIssue(agent: agent, sourceKey: sourceKey, severity: .warning, message: "Skipped OpenCode row with invalid text fields"))
                 continue
             }
-            let created = sqlite3_column_int64(statement, 1)
-            let updated = sqlite3_column_int64(statement, 2)
+            let created = sqlite3_column_int64(statement, 2)
+            let updated = sqlite3_column_int64(statement, 3)
             highWatermark = String(updated)
             do {
                 guard let object = try JSONSerialization.jsonObject(with: Data(dataText.utf8)) as? [String: Any],
@@ -449,6 +672,7 @@ struct OpenCodeUsageImporter: UsageSourceImporter {
                 let provider = object.string("providerID")
                 let rawModel = object.string("modelID") ?? "unknown"
                 let authority = UsageModelCatalog.authority(rawProviderID: provider)
+                let sessionKey = UsageSourceIdentity.eventID("\(agent.rawValue)|session|\(sessionID)")
                 let cache = tokens.dictionary("cache")
                 let rawOutput = tokens.int64("output")
                 let reasoning = tokens.int64("reasoning")
@@ -481,11 +705,35 @@ struct OpenCodeUsageImporter: UsageSourceImporter {
                     sourceTotalTokens: tokens.int64("total"),
                     sourceReportedCostNanodollars: try UsageMoney.nanodollars(fromUSD: object.double("cost")),
                     sourceKey: sourceKey,
+                    sessionKey: sessionKey,
                     sourceID: sourceID,
                     sourceSchemaVersion: "opencode-message-v1",
                     importerVersion: importerVersion
                 )
                 batch.events.append(event)
+                if let time = object.dictionary("time"),
+                   let rawStartedAt = time.int64("created"),
+                   let rawEndedAt = time.int64("completed") {
+                    let startedAt = normalizedEpochMilliseconds(rawStartedAt)
+                    let endedAt = normalizedEpochMilliseconds(rawEndedAt)
+                    batch.activeTurns.append(try UsageActiveTurn.normalized(
+                        agent: agent,
+                        sessionKey: sessionKey,
+                        pricingAuthority: authority,
+                        rawModelID: rawModel,
+                        canonicalModelID: UsageModelCatalog.canonicalModelID(
+                            authority: authority,
+                            rawModelID: rawModel,
+                            occurredAtMilliseconds: startedAt
+                        ),
+                        startedAtMilliseconds: startedAt,
+                        endedAtMilliseconds: endedAt,
+                        timingQuality: .exact,
+                        sourceKey: sourceKey,
+                        sourceID: UsageSourceIdentity.eventID("\(sourceKey)|turn|\(id)"),
+                        importerVersion: importerVersion
+                    ))
+                }
             } catch {
                 batch.issues.append(UsageImportIssue(agent: agent, sourceKey: sourceKey, severity: .warning, message: "Skipped OpenCode row \(id): \(error)"))
             }
@@ -510,12 +758,16 @@ private func timestampMilliseconds(object: [String: Any], fallback: [String: Any
         return try UsageTimestampParser.milliseconds(from: value)
     }
     if let value = object.int64("timestamp") ?? fallback.int64("timestamp") {
-        return value > 10_000_000_000 ? value : value * 1_000
+        return normalizedEpochMilliseconds(value)
     }
     if let time = object.dictionary("time"), let value = time.int64("created") ?? time.int64("completed") {
-        return value > 10_000_000_000 ? value : value * 1_000
+        return normalizedEpochMilliseconds(value)
     }
     throw UsageImportSupportError.invalidTimestamp("missing")
+}
+
+private func normalizedEpochMilliseconds(_ value: Int64) -> Int64 {
+    value > 10_000_000_000 ? value : value * 1_000
 }
 
 private func issue(agent: UsageAgent, sourceKey: String, offset: Int64, error: Error) -> UsageImportIssue {

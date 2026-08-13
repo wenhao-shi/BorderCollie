@@ -215,6 +215,8 @@ enum UsageSourceDiscovery {
 extension Dictionary where Key == String, Value == Any {
     func dictionary(_ key: String) -> [String: Any]? { self[key] as? [String: Any] }
     func string(_ key: String) -> String? { self[key] as? String }
+    func bool(_ key: String) -> Bool? { self[key] as? Bool }
+    func array(_ key: String) -> [Any]? { self[key] as? [Any] }
 
     func int64(_ key: String) -> Int64? {
         if let number = self[key] as? NSNumber { return number.int64Value }

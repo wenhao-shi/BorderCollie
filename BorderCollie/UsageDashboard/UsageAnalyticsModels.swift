@@ -63,6 +63,7 @@ struct UsageEvent: Equatable, Sendable, Identifiable {
     let incompleteReason: String?
 
     let sourceKey: String
+    let sessionKey: String?
     let sourceID: String
     let sourceSchemaVersion: String
     let importerVersion: Int
@@ -88,6 +89,7 @@ struct UsageEvent: Equatable, Sendable, Identifiable {
         sourceTotalTokens: Int64?,
         sourceReportedCostNanodollars: Int64? = nil,
         sourceKey: String,
+        sessionKey: String? = nil,
         sourceID: String,
         sourceSchemaVersion: String,
         importerVersion: Int
@@ -167,6 +169,7 @@ struct UsageEvent: Equatable, Sendable, Identifiable {
             completeness: completeness,
             incompleteReason: incompleteReason,
             sourceKey: sourceKey,
+            sessionKey: sessionKey ?? sourceKey,
             sourceID: sourceID,
             sourceSchemaVersion: sourceSchemaVersion,
             importerVersion: importerVersion
@@ -210,6 +213,7 @@ struct UsageImportIssue: Equatable, Sendable {
 struct UsageImportBatch: Sendable {
     let agent: UsageAgent
     var events: [UsageEvent]
+    var activeTurns: [UsageActiveTurn]
     var checkpoints: [UsageImportCheckpoint]
     var resetSourceKeys: Set<String>
     var removedSourceKeys: Set<String>
@@ -218,6 +222,7 @@ struct UsageImportBatch: Sendable {
     init(agent: UsageAgent) {
         self.agent = agent
         events = []
+        activeTurns = []
         checkpoints = []
         resetSourceKeys = []
         removedSourceKeys = []
@@ -228,6 +233,7 @@ struct UsageImportBatch: Sendable {
 struct UsageAgentImportReport: Equatable, Sendable {
     let agent: UsageAgent
     let importedEvents: Int
+    let importedActiveTurns: Int
     let issues: [UsageImportIssue]
 }
 

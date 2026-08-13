@@ -352,6 +352,7 @@ actor UsageAnalyticsBackend {
                 reports.append(UsageAgentImportReport(
                     agent: importer.agent,
                     importedEvents: batch.events.count,
+                    importedActiveTurns: batch.activeTurns.count,
                     issues: batch.issues
                 ))
             } catch is CancellationError {
@@ -360,6 +361,7 @@ actor UsageAnalyticsBackend {
                 reports.append(UsageAgentImportReport(
                     agent: importer.agent,
                     importedEvents: 0,
+                    importedActiveTurns: 0,
                     issues: [UsageImportIssue(
                         agent: importer.agent,
                         sourceKey: nil,

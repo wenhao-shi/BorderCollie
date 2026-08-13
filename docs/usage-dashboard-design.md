@@ -1,7 +1,9 @@
 # Historical Usage Dashboard Design
 
 Status: backend and dashboard UI implemented with 24h/7d/30d tracking periods;
-automated verification passes, while interactive screenshot QA remains pending.
+Evaluation Runs adds session/time scoping and active-time accounting. Non-launching
+compile verification and the automated test suites pass, while interactive
+screenshot QA remains pending.
 
 This document defines a local historical usage dashboard for Claude Code,
 Codex, OpenCode, and Pi. It is intentionally separate from the existing
@@ -244,6 +246,59 @@ Preserve the recorded provider, model, and per-bucket source costs for
 reconciliation. Deduplicate with session identity plus response/message
 identity; use an ordinal only as a versioned fallback for older records.
 
+## Evaluation Runs
+
+The `Evaluations` destination scopes the historical event store to one model
+evaluation task. A run is either bracketed live with Start/Stop or created from
+an explicit past time interval. After import, the user can include one or more
+overlapping agent sessions. Subscription-quota utilization is intentionally not
+part of an evaluation report.
+
+Each report contains:
+
+- disjoint `in`, `cache-write`, `cache-read`, and `out` token buckets;
+- reasoning as a subset of `out`;
+- official API-equivalent token cost and its pricing coverage;
+- per-model token, cost, and active-time breakdowns;
+- per-turn timing rows with an `exact` or `inferred` quality label.
+
+Session identifiers are keyed by a one-way hash of source/session identity.
+The database and UI do not retain or display transcript titles, prompts,
+working directories, or raw filesystem paths.
+
+### Active-Time Contract
+
+One active turn begins when the human submits a task and ends when the agent
+reaches terminal completion. The interval includes model generation, tool
+execution, subprocess time, and network waits. It excludes the idle gap after
+terminal completion and before the next human submission.
+
+The source boundary quality is explicit:
+
+| Source | Start | End | Quality |
+| --- | --- | --- | --- |
+| Codex | `event_msg.task_started` | `event_msg.task_complete` | exact |
+| OpenCode | assistant `time.created` | assistant `time.completed` | exact |
+| Claude Code | human `user` message timestamp | terminal assistant message whose `stop_reason` is not `tool_use` | inferred |
+| Pi | human `user` message timestamp | terminal assistant message whose `stopReason` is not `toolUse` | inferred |
+
+Synthetic tool-result/user records do not open a new human turn. An unfinished
+turn is kept in the incremental checkpoint state but contributes no duration
+until a terminal boundary is observed.
+
+For selected sessions, the report uses two different sums:
+
+```text
+Agent time = sum(union(active intervals within each session))
+
+Effective wall time = union(active intervals across all selected sessions)
+
+Human idle = evaluation interval - Effective wall time
+```
+
+The first value preserves parallel compute effort by adding sessions. The
+second de-overlaps concurrent sessions so it describes elapsed task time.
+
 ## Normalized Persistence Model
 
 The historical dashboard must not extend `SubscriptionQuota`. Quota snapshots
@@ -276,11 +331,17 @@ struct UsageEvent {
     let pricingRuleID: String?
     let completeness: UsageCompleteness
 
+    let sessionKey: String?
     let sourceID: String
     let sourceSchemaVersion: String
     let importerVersion: Int
 }
 ```
+
+Schema version 3 also stores `UsageActiveTurn`, `EvaluationRun`, and the
+many-to-many run/session selection. Imported events, active turns, and
+checkpoints are committed in the same source transaction, so a failed timing
+parse cannot advance a checkpoint past data that was not indexed.
 
 The persisted representation should store money as a scaled integer, such as
 USD nanodollars, rather than a binary floating-point value. Conversion to
@@ -591,6 +652,9 @@ Each implementation and migration must preserve:
 8. Price changes do not overwrite source-reported observations.
 9. Failed imports do not advance checkpoints or discard prior indexed data.
 10. No conversation content enters the analytics database, logs, or fixtures.
+11. Agent time merges overlaps inside a session before adding sessions.
+12. Effective wall time unions overlaps across every selected session.
+13. Timing quality is never promoted from inferred to exact.
 
 ## Acceptance Criteria
 

@@ -28,6 +28,9 @@ layers, and never passed into SwiftUI views.
 - A local historical usage dashboard for Claude Code, Codex, OpenCode, and Pi
   with rolling 24-hour, 7-day, and 30-day periods, hourly/daily token and cost
   charts, normalized metrics, and detailed model/day token breakdowns.
+- Evaluation Runs that bracket a live task or select a past interval, include
+  specific sessions, and report token buckets, API-equivalent cost, additive
+  agent time, de-overlapped effective wall time, and human idle time.
 
 ## Supported Trackers
 
@@ -106,6 +109,10 @@ Historical analytics backend (separate from subscription quota)
 Historical analytics UI
   UsageDashboardModel / UsageDashboardView
   UsageDailyChart / UsageMetricStrip / UsageBreakdownTable
+
+Evaluation runs (same local historical store)
+  UsageEvaluationBackend / UsageEvaluationModels
+  EvaluationRunsModel / EvaluationRunsView
 ```
 
 Provider responses are normalized into `SubscriptionQuota`. `QuotaTier`
@@ -125,6 +132,8 @@ Security boundaries to preserve:
 - Network, subprocess, and full-refresh work use explicit timeouts.
 - Provider error bodies are truncated before display.
 - Xcode previews use sample data only.
+- Historical session keys and source paths are hashed; evaluation reports do
+  not persist prompts, responses, transcript titles, or working directories.
 
 The app target currently has the macOS app sandbox disabled because the trackers
 need local auth-file access, subprocess credential lookup, and remote quota
@@ -170,6 +179,7 @@ BorderCollie/
   Codex*.swift                   Codex credential, API, display, and view code
   Cursor*.swift                  Cursor credential, API, display, and view code
   UsageDashboard/                Historical import, pricing, aggregation, and UI
+                                 plus session-scoped Evaluation Runs
 BorderCollieTests/
   BorderCollieTests.swift        Swift Testing coverage
   UsageDashboardTests.swift      Synthetic historical-backend coverage

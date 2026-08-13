@@ -9,7 +9,7 @@ enum UsageAnalyticsStoreError: Error, Equatable {
 }
 
 actor UsageAnalyticsStore {
-    static let schemaVersion = 2
+    static let schemaVersion = 3
 
     private let database: OpaquePointer
 
@@ -83,15 +83,18 @@ actor UsageAnalyticsStore {
 
     func apply(_ batch: UsageImportBatch) throws {
         guard batch.events.allSatisfy({ $0.agent == batch.agent }),
+              batch.activeTurns.allSatisfy({ $0.agent == batch.agent }),
               batch.checkpoints.allSatisfy({ $0.agent == batch.agent })
         else { throw UsageAnalyticsStoreError.batchAgentMismatch }
 
         try transaction {
             for sourceKey in batch.resetSourceKeys.union(batch.removedSourceKeys) {
                 try deleteEvents(agent: batch.agent, sourceKey: sourceKey)
+                try deleteActiveTurns(agent: batch.agent, sourceKey: sourceKey)
                 try deleteCheckpoint(agent: batch.agent, sourceKey: sourceKey)
             }
             for event in batch.events { try upsert(event) }
+            for turn in batch.activeTurns { try upsert(turn) }
             for checkpoint in batch.checkpoints { try upsert(checkpoint) }
         }
     }
@@ -120,6 +123,26 @@ actor UsageAnalyticsStore {
                   AND usage_event.occurred_at_ms >= model_alias.effective_from_ms
                   AND (model_alias.effective_until_ms IS NULL
                        OR usage_event.occurred_at_ms < model_alias.effective_until_ms)
+            )
+            """)
+            try Self.execute(database, """
+            UPDATE usage_active_turn
+            SET canonical_model_id = (
+                SELECT model_alias.canonical_model_id
+                FROM model_alias
+                WHERE model_alias.authority = usage_active_turn.pricing_authority
+                  AND model_alias.raw_model_id = usage_active_turn.raw_model_id
+                  AND usage_active_turn.started_at_ms >= model_alias.effective_from_ms
+                  AND (model_alias.effective_until_ms IS NULL
+                       OR usage_active_turn.started_at_ms < model_alias.effective_until_ms)
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM model_alias
+                WHERE model_alias.authority = usage_active_turn.pricing_authority
+                  AND model_alias.raw_model_id = usage_active_turn.raw_model_id
+                  AND usage_active_turn.started_at_ms >= model_alias.effective_from_ms
+                  AND (model_alias.effective_until_ms IS NULL
+                       OR usage_active_turn.started_at_ms < model_alias.effective_until_ms)
             )
             """)
         }
@@ -188,14 +211,21 @@ actor UsageAnalyticsStore {
         }
     }
 
-    func events(interval: DateInterval? = nil, agents: Set<UsageAgent>? = nil) throws -> [UsageEvent] {
-        if let agents, agents.isEmpty {
+    func events(
+        interval: DateInterval? = nil,
+        agents: Set<UsageAgent>? = nil,
+        sessionKeys: Set<String>? = nil
+    ) throws -> [UsageEvent] {
+        if let agents, agents.isEmpty || sessionKeys?.isEmpty == true {
             return []
         }
         var clauses: [String] = []
         if interval != nil { clauses.append("occurred_at_ms >= ? AND occurred_at_ms < ?") }
         if let agents, !agents.isEmpty {
             clauses.append("agent IN (\(Array(repeating: "?", count: agents.count).joined(separator: ",")))")
+        }
+        if let sessionKeys, !sessionKeys.isEmpty {
+            clauses.append("session_key IN (\(Array(repeating: "?", count: sessionKeys.count).joined(separator: ",")))")
         }
         let whereSQL = clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND ")
         let statement = try prepare(Self.eventSelect + whereSQL + " ORDER BY occurred_at_ms, id")
@@ -210,10 +240,161 @@ actor UsageAnalyticsStore {
                 bind(agent.rawValue, to: index, in: statement); index += 1
             }
         }
+        if let sessionKeys, !sessionKeys.isEmpty {
+            for sessionKey in sessionKeys.sorted() {
+                bind(sessionKey, to: index, in: statement); index += 1
+            }
+        }
 
         var events: [UsageEvent] = []
         while try step(statement) { events.append(try decodeEvent(statement)) }
         return events
+    }
+
+    func activeTurns(
+        interval: DateInterval? = nil,
+        agents: Set<UsageAgent>? = nil,
+        sessionKeys: Set<String>? = nil
+    ) throws -> [UsageActiveTurn] {
+        if let agents, agents.isEmpty || sessionKeys?.isEmpty == true {
+            return []
+        }
+        var clauses: [String] = []
+        if interval != nil { clauses.append("ended_at_ms > ? AND started_at_ms < ?") }
+        if let agents, !agents.isEmpty {
+            clauses.append("agent IN (\(Array(repeating: "?", count: agents.count).joined(separator: ",")))")
+        }
+        if let sessionKeys, !sessionKeys.isEmpty {
+            clauses.append("session_key IN (\(Array(repeating: "?", count: sessionKeys.count).joined(separator: ",")))")
+        }
+        let whereSQL = clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND ")
+        let statement = try prepare(Self.activeTurnSelect + whereSQL + " ORDER BY started_at_ms, id")
+        defer { sqlite3_finalize(statement) }
+        var index: Int32 = 1
+        if let interval {
+            bind(UsageEpoch.milliseconds(interval.start), to: index, in: statement); index += 1
+            bind(UsageEpoch.milliseconds(interval.end), to: index, in: statement); index += 1
+        }
+        if let agents, !agents.isEmpty {
+            for agent in agents.sorted(by: { $0.rawValue < $1.rawValue }) {
+                bind(agent.rawValue, to: index, in: statement); index += 1
+            }
+        }
+        if let sessionKeys, !sessionKeys.isEmpty {
+            for sessionKey in sessionKeys.sorted() {
+                bind(sessionKey, to: index, in: statement); index += 1
+            }
+        }
+
+        var turns: [UsageActiveTurn] = []
+        while try step(statement) { turns.append(try decodeActiveTurn(statement)) }
+        return turns
+    }
+
+    func evaluationRuns() throws -> [EvaluationRun] {
+        let statement = try prepare("""
+        SELECT id, name, started_at_ms, ended_at_ms, created_at_ms
+        FROM evaluation_run
+        ORDER BY CASE WHEN ended_at_ms IS NULL THEN 0 ELSE 1 END, started_at_ms DESC
+        """)
+        defer { sqlite3_finalize(statement) }
+        var runs: [EvaluationRun] = []
+        while try step(statement) {
+            runs.append(EvaluationRun(
+                id: text(statement, 0),
+                name: text(statement, 1),
+                startedAtMilliseconds: sqlite3_column_int64(statement, 2),
+                endedAtMilliseconds: nullableInt64(statement, 3),
+                createdAtMilliseconds: sqlite3_column_int64(statement, 4)
+            ))
+        }
+        return runs
+    }
+
+    func createEvaluationRun(
+        name: String,
+        startedAtMilliseconds: Int64,
+        endedAtMilliseconds: Int64?,
+        createdAtMilliseconds: Int64
+    ) throws -> EvaluationRun {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "evaluation_run.name", value: name)
+        }
+        if let endedAtMilliseconds, endedAtMilliseconds < startedAtMilliseconds {
+            throw UsageAnalyticsStoreError.invalidStoredValue(
+                column: "evaluation_run.ended_at_ms",
+                value: String(endedAtMilliseconds)
+            )
+        }
+        let run = EvaluationRun(
+            id: UUID().uuidString,
+            name: trimmedName,
+            startedAtMilliseconds: startedAtMilliseconds,
+            endedAtMilliseconds: endedAtMilliseconds,
+            createdAtMilliseconds: createdAtMilliseconds
+        )
+        let statement = try prepare("INSERT INTO evaluation_run VALUES (?1,?2,?3,?4,?5)")
+        defer { sqlite3_finalize(statement) }
+        bind([
+            .text(run.id), .text(run.name), .integer(run.startedAtMilliseconds),
+            .optionalInteger(run.endedAtMilliseconds), .integer(run.createdAtMilliseconds),
+        ], in: statement)
+        try requireDone(statement)
+        return run
+    }
+
+    func finishEvaluationRun(id: String, endedAtMilliseconds: Int64) throws {
+        let statement = try prepare("""
+        UPDATE evaluation_run
+        SET ended_at_ms = ?1
+        WHERE id = ?2 AND ended_at_ms IS NULL AND started_at_ms <= ?1
+        """)
+        defer { sqlite3_finalize(statement) }
+        bind(endedAtMilliseconds, to: 1, in: statement)
+        bind(id, to: 2, in: statement)
+        try requireDone(statement)
+        guard sqlite3_changes(database) == 1 else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "evaluation_run.id", value: id)
+        }
+    }
+
+    func deleteEvaluationRun(id: String) throws {
+        let statement = try prepare("DELETE FROM evaluation_run WHERE id = ?1")
+        defer { sqlite3_finalize(statement) }
+        bind(id, to: 1, in: statement)
+        try requireDone(statement)
+    }
+
+    func evaluationSessionKeys(runID: String) throws -> Set<String> {
+        let statement = try prepare("SELECT session_key FROM evaluation_run_session WHERE run_id = ?1")
+        defer { sqlite3_finalize(statement) }
+        bind(runID, to: 1, in: statement)
+        var keys: Set<String> = []
+        while try step(statement) { keys.insert(text(statement, 0)) }
+        return keys
+    }
+
+    func replaceEvaluationSessionKeys(runID: String, sessionKeys: Set<String>) throws {
+        try transaction {
+            let delete = try prepare("DELETE FROM evaluation_run_session WHERE run_id = ?1")
+            defer { sqlite3_finalize(delete) }
+            bind(runID, to: 1, in: delete)
+            try requireDone(delete)
+
+            for sessionKey in sessionKeys.sorted() {
+                let insert = try prepare("INSERT INTO evaluation_run_session VALUES (?1,?2)")
+                bind(runID, to: 1, in: insert)
+                bind(sessionKey, to: 2, in: insert)
+                do {
+                    try requireDone(insert)
+                    sqlite3_finalize(insert)
+                } catch {
+                    sqlite3_finalize(insert)
+                    throw error
+                }
+            }
+        }
     }
 
     func eventCount() throws -> Int {
@@ -229,8 +410,14 @@ actor UsageAnalyticsStore {
            cache_write_1h_tokens, cache_read_tokens, output_tokens, reasoning_output_tokens,
            total_tokens, source_total_tokens, source_reported_cost_nanos,
            estimated_cost_nanos, pricing_rule_id, completeness, incomplete_reason,
-           source_key, source_id, source_schema_version, importer_version
+           source_key, session_key, source_id, source_schema_version, importer_version
     FROM usage_event
+    """
+
+    private static let activeTurnSelect = """
+    SELECT id, agent, session_key, pricing_authority, raw_model_id, canonical_model_id,
+           started_at_ms, ended_at_ms, timing_quality, source_key, source_id, importer_version
+    FROM usage_active_turn
     """
 
     private static func migrate(_ database: OpaquePointer) throws {
@@ -263,6 +450,7 @@ actor UsageAnalyticsStore {
                 completeness TEXT NOT NULL,
                 incomplete_reason TEXT,
                 source_key TEXT NOT NULL CHECK(length(source_key) > 0),
+                session_key TEXT,
                 source_id TEXT NOT NULL,
                 source_schema_version TEXT NOT NULL,
                 importer_version INTEGER NOT NULL,
@@ -315,11 +503,13 @@ actor UsageAnalyticsStore {
                 PRIMARY KEY(authority, raw_model_id, effective_from_ms)
             )
             """)
+            try createEvaluationSchema(database)
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_time_agent ON usage_event(occurred_at_ms, agent)")
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_model_time ON usage_event(canonical_model_id, occurred_at_ms)")
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_source ON usage_event(agent, source_key)")
+            try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_session_time ON usage_event(session_key, occurred_at_ms)")
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_completeness_time ON usage_event(completeness, occurred_at_ms)")
-            try execute(database, "PRAGMA user_version = 2")
+            try execute(database, "PRAGMA user_version = 3")
         } else if version == 1 {
             try execute(database, "DROP TABLE IF EXISTS model_alias")
             try execute(database, """
@@ -336,12 +526,65 @@ actor UsageAnalyticsStore {
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_completeness_time ON usage_event(completeness, occurred_at_ms)")
             try execute(database, "PRAGMA user_version = 2")
         }
+        if version == 1 || version == 2 {
+            try execute(database, "ALTER TABLE usage_event ADD COLUMN session_key TEXT")
+            try createEvaluationSchema(database)
+            try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_session_time ON usage_event(session_key, occurred_at_ms)")
+            try execute(database, "PRAGMA user_version = 3")
+        }
+    }
+
+    private static func createEvaluationSchema(_ database: OpaquePointer) throws {
+        try execute(database, """
+        CREATE TABLE IF NOT EXISTS usage_active_turn (
+            id TEXT PRIMARY KEY,
+            agent TEXT NOT NULL,
+            session_key TEXT NOT NULL CHECK(length(session_key) > 0),
+            pricing_authority TEXT NOT NULL,
+            raw_model_id TEXT NOT NULL,
+            canonical_model_id TEXT,
+            started_at_ms INTEGER NOT NULL,
+            ended_at_ms INTEGER NOT NULL CHECK(ended_at_ms >= started_at_ms),
+            timing_quality TEXT NOT NULL,
+            source_key TEXT NOT NULL CHECK(length(source_key) > 0),
+            source_id TEXT NOT NULL,
+            importer_version INTEGER NOT NULL,
+            UNIQUE(agent, source_id)
+        )
+        """)
+        try execute(database, """
+        CREATE TABLE IF NOT EXISTS evaluation_run (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+            started_at_ms INTEGER NOT NULL,
+            ended_at_ms INTEGER CHECK(ended_at_ms IS NULL OR ended_at_ms >= started_at_ms),
+            created_at_ms INTEGER NOT NULL
+        )
+        """)
+        try execute(database, """
+        CREATE TABLE IF NOT EXISTS evaluation_run_session (
+            run_id TEXT NOT NULL REFERENCES evaluation_run(id) ON DELETE CASCADE,
+            session_key TEXT NOT NULL CHECK(length(session_key) > 0),
+            PRIMARY KEY(run_id, session_key)
+        )
+        """)
+        try execute(database, "CREATE INDEX IF NOT EXISTS usage_active_turn_interval ON usage_active_turn(ended_at_ms, started_at_ms)")
+        try execute(database, "CREATE INDEX IF NOT EXISTS usage_active_turn_session ON usage_active_turn(session_key, started_at_ms)")
+        try execute(database, "CREATE INDEX IF NOT EXISTS usage_active_turn_source ON usage_active_turn(agent, source_key)")
+        try execute(database, "CREATE UNIQUE INDEX IF NOT EXISTS evaluation_run_single_active ON evaluation_run((1)) WHERE ended_at_ms IS NULL")
     }
 
     private func upsert(_ event: UsageEvent) throws {
         let sql = """
-        INSERT INTO usage_event VALUES (
-            ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25
+        INSERT INTO usage_event (
+            id, agent, pricing_authority, raw_provider_id, raw_model_id, canonical_model_id,
+            occurred_at_ms, input_tokens, cache_write_tokens, cache_write_5m_tokens,
+            cache_write_1h_tokens, cache_read_tokens, output_tokens, reasoning_output_tokens,
+            total_tokens, source_total_tokens, source_reported_cost_nanos, estimated_cost_nanos,
+            pricing_rule_id, completeness, incomplete_reason, source_key, session_key,
+            source_id, source_schema_version, importer_version
+        ) VALUES (
+            ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26
         ) ON CONFLICT(id) DO UPDATE SET
             pricing_authority=excluded.pricing_authority, raw_provider_id=excluded.raw_provider_id,
             raw_model_id=excluded.raw_model_id, canonical_model_id=excluded.canonical_model_id,
@@ -353,7 +596,8 @@ actor UsageAnalyticsStore {
             source_reported_cost_nanos=excluded.source_reported_cost_nanos,
             estimated_cost_nanos=excluded.estimated_cost_nanos, pricing_rule_id=excluded.pricing_rule_id,
             completeness=excluded.completeness, incomplete_reason=excluded.incomplete_reason,
-            source_key=excluded.source_key, source_schema_version=excluded.source_schema_version,
+            source_key=excluded.source_key, session_key=excluded.session_key,
+            source_schema_version=excluded.source_schema_version,
             importer_version=excluded.importer_version
         """
         let statement = try prepare(sql)
@@ -368,10 +612,32 @@ actor UsageAnalyticsStore {
             .optionalInteger(event.totalTokens), .optionalInteger(event.sourceTotalTokens),
             .optionalInteger(event.sourceReportedCostNanodollars), .optionalInteger(event.estimatedAPICostNanodollars),
             .optionalText(event.pricingRuleID), .text(event.completeness.rawValue),
-            .optionalText(event.incompleteReason), .text(event.sourceKey), .text(event.sourceID),
-            .text(event.sourceSchemaVersion), .integer(Int64(event.importerVersion)),
+            .optionalText(event.incompleteReason), .text(event.sourceKey), .optionalText(event.sessionKey),
+            .text(event.sourceID), .text(event.sourceSchemaVersion),
+            .integer(Int64(event.importerVersion)),
         ]
         bind(values, in: statement)
+        try requireDone(statement)
+    }
+
+    private func upsert(_ turn: UsageActiveTurn) throws {
+        let statement = try prepare("""
+        INSERT INTO usage_active_turn VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+        ON CONFLICT(id) DO UPDATE SET
+            session_key=excluded.session_key, pricing_authority=excluded.pricing_authority,
+            raw_model_id=excluded.raw_model_id, canonical_model_id=excluded.canonical_model_id,
+            started_at_ms=excluded.started_at_ms, ended_at_ms=excluded.ended_at_ms,
+            timing_quality=excluded.timing_quality, source_key=excluded.source_key,
+            importer_version=excluded.importer_version
+        """)
+        defer { sqlite3_finalize(statement) }
+        bind([
+            .text(turn.id), .text(turn.agent.rawValue), .text(turn.sessionKey),
+            .text(turn.pricingAuthority.rawValue), .text(turn.rawModelID),
+            .optionalText(turn.canonicalModelID), .integer(turn.startedAtMilliseconds),
+            .integer(turn.endedAtMilliseconds), .text(turn.timingQuality.rawValue),
+            .text(turn.sourceKey), .text(turn.sourceID), .integer(Int64(turn.importerVersion)),
+        ], in: statement)
         try requireDone(statement)
     }
 
@@ -428,6 +694,13 @@ actor UsageAnalyticsStore {
         try requireDone(statement)
     }
 
+    private func deleteActiveTurns(agent: UsageAgent, sourceKey: String) throws {
+        let statement = try prepare("DELETE FROM usage_active_turn WHERE agent=?1 AND source_key=?2")
+        defer { sqlite3_finalize(statement) }
+        bind(agent.rawValue, to: 1, in: statement); bind(sourceKey, to: 2, in: statement)
+        try requireDone(statement)
+    }
+
     private func deleteCheckpoint(agent: UsageAgent, sourceKey: String) throws {
         let statement = try prepare("DELETE FROM import_checkpoint WHERE agent=?1 AND source_key=?2")
         defer { sqlite3_finalize(statement) }
@@ -459,8 +732,37 @@ actor UsageAnalyticsStore {
             sourceTotalTokens: nullableInt64(statement, 15), sourceReportedCostNanodollars: nullableInt64(statement, 16),
             estimatedAPICostNanodollars: nullableInt64(statement, 17), pricingRuleID: nullableText(statement, 18),
             completeness: completeness, incompleteReason: nullableText(statement, 20), sourceKey: text(statement, 21),
-            sourceID: text(statement, 22), sourceSchemaVersion: text(statement, 23),
-            importerVersion: Int(sqlite3_column_int64(statement, 24))
+            sessionKey: nullableText(statement, 22), sourceID: text(statement, 23),
+            sourceSchemaVersion: text(statement, 24), importerVersion: Int(sqlite3_column_int64(statement, 25))
+        )
+    }
+
+    private func decodeActiveTurn(_ statement: OpaquePointer) throws -> UsageActiveTurn {
+        let rawAgent = text(statement, 1)
+        let rawAuthority = text(statement, 3)
+        let rawQuality = text(statement, 8)
+        guard let agent = UsageAgent(rawValue: rawAgent) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "agent", value: rawAgent)
+        }
+        guard let authority = PricingAuthority(rawValue: rawAuthority) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "pricing_authority", value: rawAuthority)
+        }
+        guard let quality = UsageTimingQuality(rawValue: rawQuality) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "timing_quality", value: rawQuality)
+        }
+        return UsageActiveTurn(
+            id: text(statement, 0),
+            agent: agent,
+            sessionKey: text(statement, 2),
+            pricingAuthority: authority,
+            rawModelID: text(statement, 4),
+            canonicalModelID: nullableText(statement, 5),
+            startedAtMilliseconds: sqlite3_column_int64(statement, 6),
+            endedAtMilliseconds: sqlite3_column_int64(statement, 7),
+            timingQuality: quality,
+            sourceKey: text(statement, 9),
+            sourceID: text(statement, 10),
+            importerVersion: Int(sqlite3_column_int64(statement, 11))
         )
     }
 

@@ -62,6 +62,26 @@ struct UsageDashboardTests {
         #expect(second.resetSourceKeys.isEmpty)
     }
 
+    @Test func claudeImporterInfersHumanToTerminalAssistantTiming() throws {
+        let fixture = try TemporaryUsageFixture()
+        let lines = [
+            #"{"type":"user","timestamp":"2026-08-01T12:00:00Z","uuid":"user-1","message":{"role":"user","content":"Run the task"}}"#,
+            #"{"type":"assistant","timestamp":"2026-08-01T12:00:03Z","message":{"id":"assistant-tool","model":"claude-sonnet-5","stop_reason":"tool_use","content":[{"type":"tool_use"}]}}"#,
+            #"{"type":"user","timestamp":"2026-08-01T12:00:04Z","message":{"role":"user","content":[{"type":"tool_result"}]}}"#,
+            #"{"type":"assistant","timestamp":"2026-08-01T12:00:10Z","message":{"id":"assistant-final","model":"claude-sonnet-5","stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#,
+        ]
+        _ = try fixture.file("project/session.jsonl", contents: lines.joined(separator: "\n") + "\n")
+
+        let batch = try ClaudeCodeUsageImporter(projectsRoot: fixture.root).importBatch(checkpoints: [:])
+        let turn = try #require(batch.activeTurns.first)
+
+        #expect(batch.activeTurns.count == 1)
+        #expect(turn.startedAtMilliseconds == timestamp("2026-08-01T12:00:00Z"))
+        #expect(turn.endedAtMilliseconds == timestamp("2026-08-01T12:00:10Z"))
+        #expect(turn.rawModelID == "claude-sonnet-5")
+        #expect(turn.timingQuality == .inferred)
+    }
+
     @Test func codexImporterUsesLastRequestUsageAndCurrentModel() throws {
         let fixture = try TemporaryUsageFixture()
         _ = try fixture.file("2026/08/01/rollout.jsonl", contents: #"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"# + "\n" + #"{"timestamp":"2026-08-01T12:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9999},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":10,"output_tokens":30,"reasoning_output_tokens":12,"total_tokens":130}}}}"# + "\n")
@@ -77,6 +97,24 @@ struct UsageDashboardTests {
         #expect(event.totalTokens == 130)
     }
 
+    @Test func codexImporterUsesExplicitTaskBoundariesForTiming() throws {
+        let fixture = try TemporaryUsageFixture()
+        let lines = [
+            #"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#,
+            #"{"timestamp":"2026-08-01T12:00:00Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"timestamp":"2026-08-01T12:00:08Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]
+        _ = try fixture.file("2026/08/01/rollout.jsonl", contents: lines.joined(separator: "\n") + "\n")
+
+        let batch = try CodexUsageImporter(sessionsRoot: fixture.root).importBatch(checkpoints: [:])
+        let turn = try #require(batch.activeTurns.first)
+
+        #expect(batch.activeTurns.count == 1)
+        #expect(turn.durationMilliseconds == 8_000)
+        #expect(turn.rawModelID == "gpt-5.6-terra")
+        #expect(turn.timingQuality == .exact)
+    }
+
     @Test func piImporterPreservesProviderModelAndReportedCost() throws {
         let fixture = try TemporaryUsageFixture()
         _ = try fixture.file("session/session.jsonl", contents: #"{"id":"entry-1","timestamp":"2026-08-01T12:00:00Z","type":"message","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.6-sol","responseId":"response-1","usage":{"input":10,"cacheWrite":20,"cacheRead":30,"output":40,"reasoning":10,"totalTokens":100,"cost":{"input":0.1,"cacheWrite":0.1,"cacheRead":0.1,"output":0.1,"total":0.4}}}}"# + "\n")
@@ -88,6 +126,25 @@ struct UsageDashboardTests {
         #expect(event.canonicalModelID == "gpt-5.6-sol")
         #expect(event.totalTokens == 100)
         #expect(event.sourceReportedCostNanodollars == 400_000_000)
+    }
+
+    @Test func piImporterInfersTimingAcrossToolMessages() throws {
+        let fixture = try TemporaryUsageFixture()
+        let lines = [
+            #"{"id":"user-1","timestamp":"2026-08-01T12:00:00Z","type":"message","message":{"role":"user","timestamp":1785585600000,"content":"Run the task"}}"#,
+            #"{"id":"assistant-tool","timestamp":"2026-08-01T12:00:03Z","type":"message","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.6-sol","stopReason":"toolUse"}}"#,
+            #"{"id":"tool-1","timestamp":"2026-08-01T12:00:05Z","type":"message","message":{"role":"toolResult"}}"#,
+            #"{"id":"assistant-final","timestamp":"2026-08-01T12:00:09Z","type":"message","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.6-sol","stopReason":"stop"}}"#,
+        ]
+        _ = try fixture.file("session/session.jsonl", contents: lines.joined(separator: "\n") + "\n")
+
+        let batch = try PiUsageImporter(sessionsRoot: fixture.root).importBatch(checkpoints: [:])
+        let turn = try #require(batch.activeTurns.first)
+
+        #expect(batch.activeTurns.count == 1)
+        #expect(turn.durationMilliseconds == 9_000)
+        #expect(turn.rawModelID == "gpt-5.6-sol")
+        #expect(turn.timingQuality == .inferred)
     }
 
     @Test func openCodeImporterReadsSourceDatabaseWithoutWritingIt() throws {
@@ -104,6 +161,10 @@ struct UsageDashboardTests {
         #expect(event.pricingAuthority == .unknown)
         #expect(event.sourceReportedCostNanodollars == 0)
         #expect(event.totalTokens == 110)
+        #expect(event.sessionKey != nil)
+        #expect(first.activeTurns.count == 1)
+        #expect(first.activeTurns.first?.durationMilliseconds == 5_000)
+        #expect(first.activeTurns.first?.timingQuality == .exact)
         #expect(before == after)
 
         let checkpoint = try #require(first.checkpoints.first)
@@ -183,6 +244,32 @@ struct UsageDashboardTests {
             try await rollbackStore.apply(invalid)
         }
         #expect(try await rollbackStore.eventCount() == 0)
+    }
+
+    @Test func storePersistsTurnAndEvaluationSessionSelection() async throws {
+        let fixture = try TemporaryUsageFixture()
+        let store = try UsageAnalyticsStore(databaseURL: fixture.root.appendingPathComponent("analytics.sqlite3"))
+        var batch = UsageImportBatch(agent: .pi)
+        batch.events = [try makeEvent(sourceKey: "source", sessionKey: "session-a")]
+        batch.activeTurns = [try makeTurn(sessionKey: "session-a")]
+        batch.checkpoints = [checkpoint(sourceKey: "source")]
+        try await store.apply(batch)
+
+        let start = timestamp("2026-08-01T12:00:00Z")
+        let run = try await store.createEvaluationRun(
+            name: "Model evaluation",
+            startedAtMilliseconds: start,
+            endedAtMilliseconds: start + 60_000,
+            createdAtMilliseconds: start
+        )
+        try await store.replaceEvaluationSessionKeys(runID: run.id, sessionKeys: ["session-a"])
+
+        #expect(try await store.events(sessionKeys: ["session-a"]).count == 1)
+        #expect(try await store.activeTurns(sessionKeys: ["session-a"]).count == 1)
+        #expect(try await store.evaluationSessionKeys(runID: run.id) == ["session-a"])
+
+        try await store.deleteEvaluationRun(id: run.id)
+        #expect(try await store.evaluationSessionKeys(runID: run.id).isEmpty)
     }
 
     @Test func storeMigratesVersionOneAliasSchema() async throws {
@@ -283,6 +370,51 @@ struct UsageDashboardTests {
         #expect(day.outputTokens == 44)
         #expect(day.inputCacheHitRate == 0.5)
         #expect(day.outputShare == 0.4)
+    }
+
+    @Test func evaluationAggregationSeparatesAdditiveAgentTimeFromEffectiveWallTime() throws {
+        let start = timestamp("2026-08-01T12:00:00Z")
+        let run = EvaluationRun(
+            id: "run", name: "Overlap", startedAtMilliseconds: start,
+            endedAtMilliseconds: start + 100_000, createdAtMilliseconds: start
+        )
+        var selectedEvent = try makeEvent(
+            model: "gpt-5.6-sol", sourceID: "selected", occurredAt: "2026-08-01T12:00:15Z",
+            sourceKey: "source-a", sessionKey: "session-a"
+        )
+        selectedEvent.estimatedAPICostNanodollars = 2_000
+        selectedEvent.pricingRuleID = "rule"
+        let unselectedEvent = try makeEvent(
+            sourceID: "unselected", occurredAt: "2026-08-01T12:00:16Z",
+            sourceKey: "source-c", sessionKey: "session-c"
+        )
+        let turns = [
+            try makeTurn(sessionKey: "session-a", sourceID: "a1", start: start, end: start + 10_000),
+            try makeTurn(sessionKey: "session-a", sourceID: "a2", start: start + 20_000, end: start + 30_000),
+            try makeTurn(
+                agent: .claudeCode, authority: .anthropic, model: "claude-sonnet-5",
+                sessionKey: "session-b", sourceID: "b1", start: start + 5_000,
+                end: start + 25_000, quality: .inferred
+            ),
+        ]
+
+        let report = try UsageEvaluationAggregator().report(
+            run: run,
+            availableSessions: [],
+            selectedSessionKeys: ["session-a", "session-b"],
+            events: [selectedEvent, unselectedEvent],
+            turns: turns
+        )
+
+        #expect(report.totalTokens == 20)
+        #expect(report.estimatedCostNanodollars == 2_000)
+        #expect(report.timing.additiveAgentTimeMilliseconds == 40_000)
+        #expect(report.timing.effectiveWallTimeMilliseconds == 30_000)
+        #expect(report.timing.humanIdleTimeMilliseconds == 70_000)
+        #expect(report.timing.exactTurns == 2)
+        #expect(report.timing.inferredTurns == 1)
+        #expect(report.models.first { $0.modelID == "gpt-5.6-sol" }?.activeTimeMilliseconds == 20_000)
+        #expect(report.models.first { $0.modelID == "claude-sonnet-5" }?.activeTimeMilliseconds == 20_000)
     }
 
     @Test func dateRangeUsesLocalCalendarAcrossDaylightSavingChange() throws {
@@ -474,7 +606,9 @@ private func makeEvent(
     output: Int64 = 10,
     reasoning: Int64? = nil,
     write5m: Int64? = nil,
-    write1h: Int64? = nil
+    write1h: Int64? = nil,
+    sourceKey: String = "source",
+    sessionKey: String? = nil
 ) throws -> UsageEvent {
     try UsageEvent.normalized(
         agent: agent, pricingAuthority: authority, rawProviderID: authority.rawValue,
@@ -482,7 +616,33 @@ private func makeEvent(
         inputTokens: input, cacheWriteTokens: cacheWrite, cacheWrite5mTokens: write5m,
         cacheWrite1hTokens: write1h, cacheReadTokens: cacheRead, outputTokens: output,
         reasoningOutputTokens: reasoning, sourceTotalTokens: [input, cacheWrite, cacheRead, output].checkedSum(),
-        sourceKey: "source", sourceID: sourceID, sourceSchemaVersion: "test", importerVersion: 1
+        sourceKey: sourceKey, sessionKey: sessionKey, sourceID: sourceID,
+        sourceSchemaVersion: "test", importerVersion: 1
+    )
+}
+
+private func makeTurn(
+    agent: UsageAgent = .pi,
+    authority: PricingAuthority = .openAI,
+    model: String = "gpt-5.6-sol",
+    sessionKey: String,
+    sourceID: String = "turn",
+    start: Int64 = timestamp("2026-08-01T12:00:00Z"),
+    end: Int64 = timestamp("2026-08-01T12:00:10Z"),
+    quality: UsageTimingQuality = .exact
+) throws -> UsageActiveTurn {
+    try UsageActiveTurn.normalized(
+        agent: agent,
+        sessionKey: sessionKey,
+        pricingAuthority: authority,
+        rawModelID: model,
+        canonicalModelID: model,
+        startedAtMilliseconds: start,
+        endedAtMilliseconds: end,
+        timingQuality: quality,
+        sourceKey: "source",
+        sourceID: sourceID,
+        importerVersion: 1
     )
 }
 
@@ -538,18 +698,19 @@ private func createOpenCodeDatabase(at url: URL) throws {
         throw UsageImporterError.sqliteOpen("fixture")
     }
     defer { sqlite3_close(database) }
-    let data = #"{"role":"assistant","providerID":"opencode","modelID":"free-model","cost":0,"tokens":{"total":110,"input":10,"output":40,"reasoning":10,"cache":{"read":30,"write":20}},"time":{"created":1785585600000}}"#
-    guard sqlite3_exec(database, "CREATE TABLE message (id TEXT PRIMARY KEY, time_created INTEGER, time_updated INTEGER, data TEXT)", nil, nil, nil) == SQLITE_OK else {
+    let data = #"{"role":"assistant","providerID":"opencode","modelID":"free-model","cost":0,"tokens":{"total":110,"input":10,"output":40,"reasoning":10,"cache":{"read":30,"write":20}},"time":{"created":1785585600000,"completed":1785585605000}}"#
+    guard sqlite3_exec(database, "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER, time_updated INTEGER, data TEXT)", nil, nil, nil) == SQLITE_OK else {
         throw UsageImporterError.sqliteStep("fixture schema")
     }
     var statement: OpaquePointer?
-    guard sqlite3_prepare_v2(database, "INSERT INTO message VALUES (?1, ?2, ?3, ?4)", -1, &statement, nil) == SQLITE_OK,
+    guard sqlite3_prepare_v2(database, "INSERT INTO message VALUES (?1, ?2, ?3, ?4, ?5)", -1, &statement, nil) == SQLITE_OK,
           let statement else { throw UsageImporterError.sqlitePrepare("fixture insert") }
     defer { sqlite3_finalize(statement) }
     sqlite3_bind_text(statement, 1, "message-1", -1, testSQLiteTransient)
-    sqlite3_bind_int64(statement, 2, timestamp("2026-08-01T12:00:00Z"))
-    sqlite3_bind_int64(statement, 3, timestamp("2026-08-01T12:00:01Z"))
-    sqlite3_bind_text(statement, 4, data, -1, testSQLiteTransient)
+    sqlite3_bind_text(statement, 2, "session-1", -1, testSQLiteTransient)
+    sqlite3_bind_int64(statement, 3, timestamp("2026-08-01T12:00:00Z"))
+    sqlite3_bind_int64(statement, 4, timestamp("2026-08-01T12:00:01Z"))
+    sqlite3_bind_text(statement, 5, data, -1, testSQLiteTransient)
     guard sqlite3_step(statement) == SQLITE_DONE else { throw UsageImporterError.sqliteStep("fixture insert") }
 }
 

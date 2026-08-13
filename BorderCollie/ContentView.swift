@@ -15,6 +15,8 @@ struct ContentView: View {
             List(selection: $selection) {
                 Label("Usage", systemImage: "chart.xyaxis.line")
                     .tag(SidebarSection.usage)
+                Label("Evaluations", systemImage: "stopwatch")
+                    .tag(SidebarSection.evaluations)
                 sidebarLabel("Codex", icon: .codex)
                     .tag(SidebarSection.codex)
                 sidebarLabel("Cursor", icon: .cursor)
@@ -28,6 +30,8 @@ struct ContentView: View {
             switch selection ?? .usage {
             case .usage:
                 UsageDashboardView()
+            case .evaluations:
+                EvaluationRunsView()
             case .codex:
                 CodexUsageView()
             case .cursor:
@@ -50,6 +54,7 @@ struct ContentView: View {
 
 private enum SidebarSection: String, Identifiable {
     case usage
+    case evaluations
     case codex
     case cursor
     case claudeCode

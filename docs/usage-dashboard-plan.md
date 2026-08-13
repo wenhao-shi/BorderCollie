@@ -1,8 +1,8 @@
 # Historical Usage Dashboard Implementation Plan
 
-Status: stages 0–5 complete; stage 6 automated verification and documentation
-complete. Interactive screenshot QA remains pending because ScreenCaptureKit
-could not start a capture stream in the current session.
+Status: stages 0–7 implemented. Non-launching source/test compilation and all
+automated suites pass. Interactive screenshot QA remains pending because the
+verification workflow does not launch the app.
 
 This plan implements `docs/usage-dashboard-design.md`. It is ordered so that
 data correctness and provenance are proven before the dashboard UI can present
@@ -282,3 +282,28 @@ Commits should remain reviewable and preserve working intermediate states:
 Do not merge a chart backed by fixture-only or partially normalized data as a
 finished dashboard. The first user-visible slice should already use the real
 incremental store and expose coverage honestly.
+
+## Stage 7: Evaluation Runs
+
+### Work
+
+- Add session attribution to normalized events without persisting transcript
+  content or raw paths.
+- Import active-turn intervals for all four historical sources and label their
+  boundary quality as exact or inferred.
+- Persist live and past evaluation intervals plus editable session selection.
+- Report selected-session token buckets, API-equivalent cost, per-model totals,
+  additive agent time, de-overlapped effective wall time, and human idle time.
+- Add a native split-view Evaluations destination with Start/Stop, past-range
+  creation, session checkboxes, coverage, and per-turn disclosure.
+
+### Tests And Gate
+
+- Synthetic fixtures cover Codex/OpenCode exact markers and Claude Code/Pi
+  inference across tool loops.
+- Overlapping sessions prove the difference between additive and de-overlapped
+  duration arithmetic.
+- SQLite tests cover turn persistence, run/session selection, and cascade
+  cleanup.
+- `build-for-testing` must compile the app and Swift Testing bundle without
+  launching the app.
