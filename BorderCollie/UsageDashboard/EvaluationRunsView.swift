@@ -312,7 +312,10 @@ private struct EvaluationRunDetailView: View {
     }
 
     private var summaryCards: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 150), spacing: 12, alignment: .top)],
+            spacing: 12
+        ) {
             summaryCard(
                 "Effective wall",
                 EvaluationFormatting.duration(milliseconds: report.timing.effectiveWallTimeMilliseconds),
@@ -345,7 +348,10 @@ private struct EvaluationRunDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Token breakdown")
                 .font(.headline)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 130), spacing: 10, alignment: .top)],
+                spacing: 10
+            ) {
                 tokenMetric("In", report.inputTokens)
                 tokenMetric("Cache write", report.cacheWriteTokens)
                 tokenMetric("Cache read", report.cacheReadTokens)
@@ -481,8 +487,8 @@ private struct EvaluationRunDetailView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+        .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
     }
 
@@ -503,8 +509,8 @@ private struct EvaluationRunDetailView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 56, alignment: .topLeading)
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
     }
 
