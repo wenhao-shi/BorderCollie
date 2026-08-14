@@ -567,7 +567,7 @@ JSONL importers may retain pending lifecycle correlation in the checkpoint high-
 
 ### Session list
 
-`TrajectoryBackend` derives session summaries from the union of usage events, active turns, activities, and capability rows. This lets an incomplete session remain discoverable even when it has no terminal turn or billable usage record.
+`TrajectoryBackend` derives session summaries from the union of usage events, active turns, and activities. Capability rows enrich a time-addressable session but do not create one because they deliberately contain no timestamps. An incomplete session remains discoverable when it has a started activity even if it has no terminal turn or billable usage record; an open activity uses its start as the provisional session end.
 
 The destination provides agent and period filters. Period choices are 24h, 7d, 30d, and All; filter state is window-scoped with `@SceneStorage`. Sessions sort newest first and load in pages of 200. A `Load earlier` row makes partial list scope explicit.
 
@@ -765,7 +765,7 @@ All four providers must at minimum retain their current coarse turn timeline. De
 ### Stage 3: backend and pure projection
 
 1. Add `TrajectoryBackend` that composes the existing usage refresh with trajectory queries.
-2. Add paged session discovery across usage, turns, activities, and capabilities.
+2. Add paged session discovery across usage, turns, and activities, then join capabilities for the resulting sessions.
 3. Implement hierarchy validation and deterministic flattening.
 4. Implement Order, Active time, and Clock time projection math.
 5. Implement shared selection/range-overlap logic by stable record ID.
