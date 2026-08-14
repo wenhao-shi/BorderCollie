@@ -474,63 +474,49 @@ struct UsageDashboardTests {
         #expect(days.allSatisfy { $0.totalTokens == 20 })
     }
 
-    @Test func chartHoverSelectsOnlyTheNearestVisibleSegmentWithinItsHitRadius() throws {
+    @Test func chartSelectionSnapsToTheNearestSampleOnEitherSide() throws {
         let start = Date(timeIntervalSince1970: 1_000)
-        let end = start.addingTimeInterval(100)
-        let series = [
-            UsageChartScreenSeries(
-                agent: .codex,
-                points: [
-                    UsageChartScreenPoint(date: start, value: 10, position: CGPoint(x: 0, y: 10)),
-                    UsageChartScreenPoint(date: end, value: 30, position: CGPoint(x: 100, y: 30)),
-                ]
-            ),
-            UsageChartScreenSeries(
-                agent: .claudeCode,
-                points: [
-                    UsageChartScreenPoint(date: start, value: 50, position: CGPoint(x: 0, y: 50)),
-                    UsageChartScreenPoint(date: end, value: 50, position: CGPoint(x: 100, y: 50)),
-                ]
-            ),
-        ]
-
-        let selection = try #require(
-            UsageChartInteraction.nearestSelection(
-                to: CGPoint(x: 50, y: 21),
-                series: series,
-                maximumDistance: 14
-            )
-        )
-        #expect(selection.agent == .codex)
-        #expect(abs(selection.date.timeIntervalSince(start) - 50.19) < 0.1)
-        #expect(abs(selection.value - 20.04) < 0.1)
+        let grid = [start, start.addingTimeInterval(100), start.addingTimeInterval(200)]
 
         #expect(
-            UsageChartInteraction.nearestSelection(
-                to: CGPoint(x: 50, y: 80),
-                series: series,
-                maximumDistance: 14
-            ) == nil
+            UsageChartInteraction.nearestDate(to: start.addingTimeInterval(40), in: grid) == grid[0]
         )
+        #expect(
+            UsageChartInteraction.nearestDate(to: start.addingTimeInterval(60), in: grid) == grid[1]
+        )
+        // Outside the domain on either side clamps to the end sample rather
+        // than returning nothing, so a pointer just past the last bucket still
+        // reads that bucket.
+        #expect(
+            UsageChartInteraction.nearestDate(to: start.addingTimeInterval(-500), in: grid) == grid[0]
+        )
+        #expect(
+            UsageChartInteraction.nearestDate(to: start.addingTimeInterval(900), in: grid) == grid[2]
+        )
+        #expect(UsageChartInteraction.nearestDate(to: start, in: []) == nil)
     }
 
-    @Test func chartHoverSupportsSinglePointSeries() throws {
-        let date = Date(timeIntervalSince1970: 1_000)
-        let series = [
-            UsageChartScreenSeries(
-                agent: .pi,
-                points: [UsageChartScreenPoint(date: date, value: 42, position: CGPoint(x: 20, y: 30))]
-            )
-        ]
+    @Test func chartDensifyGivesEverySeriesTheSameDateGrid() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let middle = start.addingTimeInterval(100)
+        let end = start.addingTimeInterval(200)
 
-        let selection = try #require(
-            UsageChartInteraction.nearestSelection(
-                to: CGPoint(x: 23, y: 34),
-                series: series,
-                maximumDistance: 5
-            )
-        )
-        #expect(selection == UsageChartHoverSelection(agent: .pi, date: date, value: 42))
+        let densified = UsageChartInteraction.densified(series: [
+            .codex: [
+                UsageChartCurvePoint(date: start, value: 10),
+                UsageChartCurvePoint(date: end, value: 30),
+            ],
+            .claudeCode: [UsageChartCurvePoint(date: middle, value: 20)],
+        ])
+
+        // Swift Charts stacks by matching x values, so an agent that was idle in
+        // a bucket must still carry a zero there instead of being absent.
+        let codex = try #require(densified[.codex])
+        let claude = try #require(densified[.claudeCode])
+        #expect(codex.map(\.date) == [start, middle, end])
+        #expect(claude.map(\.date) == [start, middle, end])
+        #expect(codex.map(\.value) == [10, 0, 30])
+        #expect(claude.map(\.value) == [0, 20, 0])
     }
 
     @Test func chartCurveSamplingPreservesAnchorsAndMonotonicBounds() throws {
@@ -551,7 +537,7 @@ struct UsageDashboardTests {
         #expect(samples[4...8].allSatisfy { (20...30).contains($0.value) })
     }
 
-    @Test func chartHoverProjectionStaysOnTheRenderedSampledCurve() throws {
+    @Test func chartSelectionLandsOnASampleTheCurveActuallyDrew() throws {
         let start = Date(timeIntervalSince1970: 1_000)
         let curve = UsageChartCurve.samples(
             points: [
@@ -561,36 +547,33 @@ struct UsageDashboardTests {
             ],
             subdivisions: 4
         )
-        let screenPoints = curve.map {
-            UsageChartScreenPoint(
-                date: $0.date,
-                value: $0.value,
-                position: CGPoint(
-                    x: $0.date.timeIntervalSince(start),
-                    y: $0.value
-                )
-            )
-        }
 
-        let selection = try #require(
-            UsageChartInteraction.nearestSelection(
-                to: CGPoint(x: 6.25, y: 34),
-                series: [UsageChartScreenSeries(agent: .codex, points: screenPoints)],
-                maximumDistance: 10
-            )
+        // The callout reports a value the chart plotted, so selection must
+        // resolve to a rendered sample rather than to an interpolated point
+        // between two of them.
+        let selected = try #require(
+            UsageChartInteraction.nearestDate(to: start.addingTimeInterval(6.25), in: curve.map(\.date))
         )
-        let segment = try #require(
-            zip(curve, curve.dropFirst()).first {
-                $0.0.date <= selection.date && selection.date <= $0.1.date
-            }
-        )
-        let segmentStart = segment.0
-        let segmentEnd = segment.1
-        let fraction = selection.date.timeIntervalSince(segmentStart.date) /
-            segmentEnd.date.timeIntervalSince(segmentStart.date)
-        let expectedValue = segmentStart.value + (segmentEnd.value - segmentStart.value) * fraction
+        #expect(curve.contains { $0.date == selected })
+        #expect(abs(selected.timeIntervalSince(start) - 5) < 0.001)
+    }
 
-        #expect(abs(selection.value - expectedValue) < 0.000_001)
+    @Test func chartDensifyPreservesSeriesThatAlreadyShareAGrid() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let end = start.addingTimeInterval(60)
+        let series: [UsageAgent: [UsageChartCurvePoint]] = [
+            .codex: [
+                UsageChartCurvePoint(date: start, value: 1),
+                UsageChartCurvePoint(date: end, value: 2),
+            ],
+            .pi: [
+                UsageChartCurvePoint(date: start, value: 3),
+                UsageChartCurvePoint(date: end, value: 4),
+            ],
+        ]
+
+        #expect(UsageChartInteraction.densified(series: series) == series)
+        #expect(UsageChartInteraction.densified(series: [:]).isEmpty)
     }
 }
 

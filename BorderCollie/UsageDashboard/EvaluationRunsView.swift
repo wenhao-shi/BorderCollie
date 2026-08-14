@@ -9,15 +9,25 @@ struct EvaluationRunsView: View {
     var body: some View {
         HSplitView {
             runList
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
 
             detail
-                .frame(minWidth: 760, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 980, minHeight: 640)
-        .navigationTitle("Evaluations")
+        .navigationTitle(selectedRun?.name ?? "Evaluations")
+        .navigationSubtitle(navigationSubtitle)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                if let report = model.report, report.run.isActive, report.run.id == selectedRun?.id {
+                    // A destructive primary action belongs in the toolbar with
+                    // the other verbs, not floating in the scrolled content.
+                    Button("Stop Evaluation", systemImage: "stop.circle.fill") {
+                        Task { await model.stop(runID: report.run.id) }
+                    }
+                    .tint(.red)
+                    .disabled(model.isRefreshing)
+                }
+
                 Menu {
                     Button("Start Evaluation…", systemImage: "record.circle") {
                         creationMode = .live
@@ -93,6 +103,18 @@ struct EvaluationRunsView: View {
         }
     }
 
+    private var navigationSubtitle: String {
+        guard let run = selectedRun else { return "" }
+        if run.isActive {
+            return "Running since \(UsageDashboardFormatting.dateAndTime(run.startedAt))"
+        }
+        guard let interval = run.interval() else { return "" }
+        return UsageDashboardFormatting.rollingInterval(interval)
+    }
+
+    /// `.inset`, not `.sidebar`. This list sits inside the detail column, so
+    /// sidebar styling put a second thing that looks like a source list next to
+    /// the real one, with the selection tint of a sidebar it is not.
     private var runList: some View {
         List(selection: $selectedRunID) {
             if model.runs.isEmpty {
@@ -104,7 +126,7 @@ struct EvaluationRunsView: View {
             } else {
                 ForEach(model.runs) { run in
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: UsageDesign.Spacing.small) {
                             Text(run.name)
                                 .fontWeight(.medium)
                                 .lineLimit(1)
@@ -120,6 +142,7 @@ struct EvaluationRunsView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    .padding(.vertical, 2)
                     .tag(run.id)
                     .contextMenu {
                         Button("Delete", systemImage: "trash", role: .destructive) {
@@ -129,7 +152,7 @@ struct EvaluationRunsView: View {
                 }
             }
         }
-        .listStyle(.sidebar)
+        .listStyle(.inset)
     }
 
     @ViewBuilder
@@ -145,11 +168,7 @@ struct EvaluationRunsView: View {
         } else if let report = model.report, report.run.id == selectedRun?.id {
             EvaluationRunDetailView(
                 report: report,
-                isRefreshing: model.isRefreshing,
                 errorMessage: model.errorMessage,
-                onStop: {
-                    Task { await model.stop(runID: report.run.id) }
-                },
                 onSessionChange: { sessionKey, isSelected in
                     Task {
                         await model.setSession(
@@ -193,24 +212,22 @@ struct EvaluationRunsView: View {
 
 private struct EvaluationRunDetailView: View {
     let report: UsageEvaluationReport
-    let isRefreshing: Bool
     let errorMessage: String?
-    let onStop: () -> Void
     let onSessionChange: (String, Bool) -> Void
 
     @State private var showsTurns = false
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                header
-
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.section) {
                 if let errorMessage {
                     Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .padding(12)
+                        .font(.callout)
+                        .symbolRenderingMode(.multicolor)
+                        .padding(UsageDesign.Spacing.medium)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                        .background(.quaternary, in: UsageDesign.cardShape)
+                        .overlay(UsageDesign.cardShape.stroke(.separator))
                 }
 
                 if report.run.isActive {
@@ -224,294 +241,276 @@ private struct EvaluationRunDetailView: View {
                     coverage
                 }
             }
-            .padding(24)
-        }
-    }
-
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(report.run.name)
-                    .font(.largeTitle.weight(.semibold))
-                if report.run.isActive {
-                    Text("Started \(UsageDashboardFormatting.dateAndTime(report.run.startedAt))")
-                        .foregroundStyle(.secondary)
-                } else if let interval = report.run.interval() {
-                    Text(UsageDashboardFormatting.rollingInterval(interval))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if report.run.isActive {
-                Button("Stop Evaluation", systemImage: "stop.circle.fill", action: onStop)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .disabled(isRefreshing)
-            }
+            .padding(UsageDesign.Spacing.section)
         }
     }
 
     private var activeState: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        GroupBox {
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.medium) {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(EvaluationFormatting.duration(milliseconds: max(UsageEpoch.milliseconds(context.date) - report.run.startedAtMilliseconds, 0)))
+                        .font(.heroValue)
+                        .accessibilityLabel("Elapsed wall time")
+                }
+                Text("Elapsed wall time")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text("Run the task in one or more agent sessions, then stop the evaluation. BorderCollie will refresh local histories and select every session active in this interval for review.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(UsageDesign.Spacing.small)
+        } label: {
             Label("Evaluation running", systemImage: "record.circle")
                 .font(.headline)
                 .foregroundStyle(.red)
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text("Elapsed wall time: \(EvaluationFormatting.duration(milliseconds: max(UsageEpoch.milliseconds(context.date) - report.run.startedAtMilliseconds, 0)))")
-                    .font(.title3.monospacedDigit())
-            }
-            Text("Run the task in one or more agent sessions, then stop the evaluation. BorderCollie will refresh local histories and select every session active in this interval for review.")
-                .foregroundStyle(.secondary)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var sessionSelection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        GroupBox {
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.medium) {
+                if report.availableSessions.isEmpty {
+                    ContentUnavailableView(
+                        "No sessions found",
+                        systemImage: "rectangle.stack.badge.minus",
+                        description: Text("No supported agent history overlaps this interval. Refresh after the sessions have been written to disk.")
+                    )
+                    .frame(minHeight: 120)
+                } else {
+                    ForEach(Array(report.availableSessions.enumerated()), id: \.element.id) { index, session in
+                        Toggle(
+                            isOn: Binding(
+                                get: { report.selectedSessionKeys.contains(session.sessionKey) },
+                                set: { onSessionChange(session.sessionKey, $0) }
+                            )
+                        ) {
+                            HStack(spacing: UsageDesign.Spacing.small) {
+                                UsageAgentIconView(agent: session.agent, size: 16)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    // Start time leads: a positional index is not
+                                    // an identity, and it changes meaning as soon
+                                    // as the list re-sorts.
+                                    Text("\(UsageDashboardFormatting.dateAndTime(session.startedAt)) · \(session.agent.displayName)")
+                                    Text(sessionDetail(session, index: index))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(UsageDesign.Spacing.small)
+        } label: {
             HStack {
                 Text("Included sessions")
                     .font(.headline)
                 Spacer()
                 Text("\(report.selectedSessionKeys.count) of \(report.availableSessions.count)")
                     .foregroundStyle(.secondary)
-            }
-
-            if report.availableSessions.isEmpty {
-                ContentUnavailableView(
-                    "No sessions found",
-                    systemImage: "rectangle.stack.badge.minus",
-                    description: Text("No supported agent history overlaps this interval. Refresh after the sessions have been written to disk.")
-                )
-                .frame(minHeight: 120)
-            } else {
-                ForEach(Array(report.availableSessions.enumerated()), id: \.element.id) { index, session in
-                    Toggle(
-                        isOn: Binding(
-                            get: { report.selectedSessionKeys.contains(session.sessionKey) },
-                            set: { onSessionChange(session.sessionKey, $0) }
-                        )
-                    ) {
-                        HStack(spacing: 10) {
-                            UsageAgentIconView(agent: session.agent, size: 16)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("\(session.agent.displayName) · Session \(index + 1)")
-                                Text(sessionDetail(session))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                if !report.availableSessions.isEmpty {
+                    Button(allSelected ? "Deselect All" : "Select All") {
+                        for session in report.availableSessions {
+                            onSessionChange(session.sessionKey, !allSelected)
                         }
                     }
-                    .toggleStyle(.checkbox)
+                    .buttonStyle(.link)
                 }
             }
         }
-        .padding(16)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var allSelected: Bool {
+        !report.availableSessions.isEmpty
+            && report.availableSessions.allSatisfy { report.selectedSessionKeys.contains($0.sessionKey) }
     }
 
     private var summaryCards: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 150), spacing: 12, alignment: .top)],
-            spacing: 12
-        ) {
-            summaryCard(
-                "Effective wall",
-                EvaluationFormatting.duration(milliseconds: report.timing.effectiveWallTimeMilliseconds),
-                "Parallel overlap counted once"
-            )
-            summaryCard(
-                "Agent time",
-                EvaluationFormatting.duration(milliseconds: report.timing.additiveAgentTimeMilliseconds),
-                "Selected sessions added"
-            )
-            summaryCard(
-                "Human idle",
-                EvaluationFormatting.duration(milliseconds: report.timing.humanIdleTimeMilliseconds),
-                "Outside active turn intervals"
-            )
-            summaryCard(
-                "Tokens",
-                UsageDashboardFormatting.tokens(report.totalTokens),
-                "\(report.coverage.completeEvents) complete events"
-            )
-            summaryCard(
-                "API-equivalent cost",
-                UsageDashboardFormatting.currency(nanodollars: report.estimatedCostNanodollars),
-                "\(report.coverage.pricedEvents) priced events"
-            )
+        GroupBox {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 150), spacing: UsageDesign.Spacing.large, alignment: .top)],
+                spacing: UsageDesign.Spacing.large
+            ) {
+                MetricTile(
+                    title: "Effective wall",
+                    value: EvaluationFormatting.duration(milliseconds: report.timing.effectiveWallTimeMilliseconds),
+                    detail: "Parallel overlap counted once"
+                )
+                MetricTile(
+                    title: "Agent time",
+                    value: EvaluationFormatting.duration(milliseconds: report.timing.additiveAgentTimeMilliseconds),
+                    detail: "Selected sessions added"
+                )
+                MetricTile(
+                    title: "Human idle",
+                    value: EvaluationFormatting.duration(milliseconds: report.timing.humanIdleTimeMilliseconds),
+                    detail: "Outside active turn intervals"
+                )
+                MetricTile(
+                    title: "Tokens",
+                    value: UsageDashboardFormatting.tokens(report.totalTokens),
+                    detail: "\(report.coverage.completeEvents) complete events"
+                )
+                MetricTile(
+                    title: "API-equivalent cost",
+                    value: UsageDashboardFormatting.currency(nanodollars: report.estimatedCostNanodollars),
+                    detail: "\(report.coverage.pricedEvents) priced events"
+                )
+            }
+            .padding(UsageDesign.Spacing.small)
+        } label: {
+            Text("Summary")
+                .font(.headline)
         }
     }
 
     private var tokenBreakdown: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        GroupBox {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 130), spacing: UsageDesign.Spacing.medium, alignment: .top)],
+                spacing: UsageDesign.Spacing.medium
+            ) {
+                MetricTile(title: "In", value: UsageDashboardFormatting.tokens(report.inputTokens))
+                MetricTile(title: "Cache write", value: UsageDashboardFormatting.tokens(report.cacheWriteTokens))
+                MetricTile(title: "Cache read", value: UsageDashboardFormatting.tokens(report.cacheReadTokens))
+                MetricTile(
+                    title: "Out",
+                    value: UsageDashboardFormatting.tokens(report.outputTokens),
+                    detail: report.reasoningOutputTokens > 0
+                        ? "\(UsageDashboardFormatting.tokens(report.reasoningOutputTokens)) reasoning"
+                        : nil
+                )
+                MetricTile(title: "Input cache hit", value: UsageDashboardFormatting.percent(report.inputCacheHitRate))
+                MetricTile(title: "Output share", value: UsageDashboardFormatting.percent(report.outputShare))
+            }
+            .padding(UsageDesign.Spacing.small)
+        } label: {
             Text("Token breakdown")
                 .font(.headline)
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 130), spacing: 10, alignment: .top)],
-                spacing: 10
-            ) {
-                tokenMetric("In", report.inputTokens)
-                tokenMetric("Cache write", report.cacheWriteTokens)
-                tokenMetric("Cache read", report.cacheReadTokens)
-                tokenMetric("Out", report.outputTokens, detail: report.reasoningOutputTokens > 0
-                    ? "\(UsageDashboardFormatting.tokens(report.reasoningOutputTokens)) reasoning"
-                    : nil)
-                metric("Input cache hit", UsageDashboardFormatting.percent(report.inputCacheHitRate))
-                metric("Output share", UsageDashboardFormatting.percent(report.outputShare))
-            }
         }
     }
 
+    /// A `Grid`, not a `Table`. A `Table` brings its own scroll view, and this
+    /// pane is already inside one — the nested-scroll trap is worse here than
+    /// the sorting a `Table` would add, for a handful of rows.
     private var modelBreakdown: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("By model")
-                .font(.headline)
+        GroupBox {
             if report.models.isEmpty {
                 Text("No complete token events or active turns are selected.")
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ScrollView(.horizontal) {
-                    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 9) {
+                Grid(alignment: .leading, horizontalSpacing: UsageDesign.Spacing.large, verticalSpacing: 9) {
+                    GridRow {
+                        tableHeader("Model")
+                        tableHeader("Active time")
+                        tableHeader("In")
+                        tableHeader("Cache write")
+                        tableHeader("Cache read")
+                        tableHeader("Out")
+                        tableHeader("Total")
+                        tableHeader("Cost")
+                    }
+                    Divider().gridCellColumns(8)
+                    ForEach(report.models) { row in
                         GridRow {
-                            tableHeader("Model")
-                            tableHeader("Active time")
-                            tableHeader("In")
-                            tableHeader("Cache write")
-                            tableHeader("Cache read")
-                            tableHeader("Out")
-                            tableHeader("Total")
-                            tableHeader("Cost")
-                        }
-                        Divider().gridCellColumns(8)
-                        ForEach(report.models) { row in
-                            GridRow {
-                                HStack(spacing: 7) {
-                                    UsageAgentIconView(agent: row.agent, size: 14)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(row.modelID).lineLimit(1)
-                                        Text(row.agent.displayName)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
+                            HStack(spacing: 7) {
+                                UsageAgentIconView(agent: row.agent, size: 14)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(row.modelID).lineLimit(1)
+                                    Text(row.agent.displayName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                value(EvaluationFormatting.duration(milliseconds: row.activeTimeMilliseconds))
-                                value(UsageDashboardFormatting.tokens(row.inputTokens))
-                                value(UsageDashboardFormatting.tokens(row.cacheWriteTokens))
-                                value(UsageDashboardFormatting.tokens(row.cacheReadTokens))
-                                value(UsageDashboardFormatting.tokens(row.outputTokens))
-                                value(UsageDashboardFormatting.tokens(row.totalTokens))
-                                value(modelCost(row))
                             }
+                            value(EvaluationFormatting.duration(milliseconds: row.activeTimeMilliseconds))
+                            value(UsageDashboardFormatting.tokens(row.inputTokens))
+                            value(UsageDashboardFormatting.tokens(row.cacheWriteTokens))
+                            value(UsageDashboardFormatting.tokens(row.cacheReadTokens))
+                            value(UsageDashboardFormatting.tokens(row.outputTokens))
+                            value(UsageDashboardFormatting.tokens(row.totalTokens))
+                            value(modelCost(row))
                         }
                     }
                 }
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+        } label: {
+            Text("By model")
+                .font(.headline)
         }
-        .padding(16)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var turnBreakdown: some View {
-        DisclosureGroup(isExpanded: $showsTurns) {
-            if report.turns.isEmpty {
-                Text("No complete active turns are available for the selected sessions.")
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(report.turns.enumerated()), id: \.element.id) { index, turn in
-                        HStack(spacing: 10) {
-                            UsageAgentIconView(agent: turn.agent, size: 14)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Turn \(index + 1) · \(turn.modelID)")
-                                Text("\(EvaluationFormatting.dateTime(milliseconds: turn.startedAtMilliseconds)) · \(turn.timingQuality == .exact ? "exact markers" : "inferred boundaries")")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+        GroupBox {
+            DisclosureGroup(isExpanded: $showsTurns) {
+                if report.turns.isEmpty {
+                    Text("No complete active turns are available for the selected sessions.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, UsageDesign.Spacing.small)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(report.turns.enumerated()), id: \.element.id) { index, turn in
+                            HStack(spacing: UsageDesign.Spacing.medium) {
+                                UsageAgentIconView(agent: turn.agent, size: 14)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Turn \(index + 1) · \(turn.modelID)")
+                                    Text("\(EvaluationFormatting.dateTime(milliseconds: turn.startedAtMilliseconds)) · \(turn.timingQuality == .exact ? "exact markers" : "inferred boundaries")")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(EvaluationFormatting.duration(milliseconds: turn.durationMilliseconds))
+                                    .monospacedDigit()
                             }
-                            Spacer()
-                            Text(EvaluationFormatting.duration(milliseconds: turn.durationMilliseconds))
-                                .monospacedDigit()
+                            .padding(.vertical, UsageDesign.Spacing.small)
+                            if index < report.turns.count - 1 { Divider() }
                         }
-                        .padding(.vertical, 8)
-                        if index < report.turns.count - 1 { Divider() }
                     }
+                    .padding(.top, UsageDesign.Spacing.tight)
                 }
-                .padding(.top, 4)
-            }
-        } label: {
-            HStack {
-                Text("By turn")
-                    .font(.headline)
-                Spacer()
-                Text("\(report.turns.count)")
-                    .foregroundStyle(.secondary)
+            } label: {
+                HStack {
+                    Text("By turn")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(report.turns.count)")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(16)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    @ViewBuilder
     private var coverage: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.small) {
             Text("Coverage")
                 .font(.headline)
-            Text("\(report.timing.exactTurns) turns use explicit timing markers; \(report.timing.inferredTurns) use message-boundary inference.")
-            if report.coverage.partialEvents > 0 {
-                Text("\(report.coverage.partialEvents) partial events are excluded from token and cost totals.")
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.tight) {
+                Text("\(report.timing.exactTurns) turns use explicit timing markers; \(report.timing.inferredTurns) use message-boundary inference.")
+                if report.coverage.partialEvents > 0 {
+                    Text("\(report.coverage.partialEvents) partial events are excluded from token and cost totals.")
+                }
+                if report.coverage.unpricedCompleteEvents > 0 {
+                    Text("\(report.coverage.unpricedCompleteEvents) complete events have no verified price; tokens include them and cost does not.")
+                }
+                Text("Agent-active time includes model generation, tools, subprocesses, and network waits. Idle gaps after an agent completes and before the next human submission are excluded.")
             }
-            if report.coverage.unpricedCompleteEvents > 0 {
-                Text("\(report.coverage.unpricedCompleteEvents) complete events have no verified price; tokens include them and cost does not.")
-            }
-            Text("Agent-active time includes model generation, tools, subprocesses, and network waits. Idle gaps after an agent completes and before the next human submission are excluded.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
 
-    private func sessionDetail(_ session: EvaluationSessionSummary) -> String {
+    private func sessionDetail(_ session: EvaluationSessionSummary, index: Int) -> String {
         let models = session.modelIDs.isEmpty ? "Unknown model" : session.modelIDs.joined(separator: ", ")
-        return "\(UsageDashboardFormatting.dateAndTime(session.startedAt)) · \(session.activeTurnCount) turns · \(session.eventCount) events · \(models)"
-    }
-
-    private func summaryCard(_ title: String, _ value: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title3.monospacedDigit())
-            Text(detail)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
-        .padding(14)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func tokenMetric(_ title: String, _ value: Int64, detail: String? = nil) -> some View {
-        metric(title, UsageDashboardFormatting.tokens(value), detail: detail)
-    }
-
-    private func metric(_ title: String, _ value: String, detail: String? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title3.monospacedDigit())
-            if let detail {
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 56, alignment: .topLeading)
-        .padding(12)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+        return "Session \(index + 1) · \(session.activeTurnCount) turns · \(session.eventCount) events · \(models)"
     }
 
     private func tableHeader(_ text: String) -> some View {
@@ -551,39 +550,42 @@ private struct EvaluationCreationSheet: View {
     @State private var isSaving = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(mode == .live ? "Start Evaluation" : "Add Past Evaluation")
-                .font(.title2.weight(.semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            // A `Form`, so the field labels share one alignment column. The
+            // hand-built stack labelled the date pickers but left the name field
+            // with only a placeholder, so nothing lined up.
+            Form {
+                TextField("Task name", text: $name, prompt: Text("e.g. Implement paged attention"))
 
-            TextField("Task name", text: $name, prompt: Text("e.g. Implement paged attention"))
-
-            if mode == .past {
-                DatePicker(
-                    "Start",
-                    selection: $startedAt,
-                    displayedComponents: [.date, .hourAndMinute]
-                )
-                DatePicker(
-                    "End",
-                    selection: $endedAt,
-                    displayedComponents: [.date, .hourAndMinute]
-                )
-                if endedAt <= startedAt {
-                    Text("End must be later than start.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                if mode == .past {
+                    DatePicker("Start", selection: $startedAt, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("End", selection: $endedAt, displayedComponents: [.date, .hourAndMinute])
                 }
-            } else {
-                Text("BorderCollie records the start immediately. Stop the evaluation after the selected agent sessions finish.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                Section {
+                    if mode == .past, endedAt <= startedAt {
+                        Label("End must be later than start.", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    } else if mode == .live {
+                        Text("BorderCollie records the start immediately. Stop the evaluation after the selected agent sessions finish.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
+            .formStyle(.grouped)
+
+            Divider()
 
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) {
                     dismiss()
                 }
+                .keyboardShortcut(.cancelAction)
+
                 Button(mode == .live ? "Start" : "Create") {
                     isSaving = true
                     Task {
@@ -593,15 +595,18 @@ private struct EvaluationCreationSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(
-                    isSaving
-                        || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || (mode == .past && endedAt <= startedAt)
-                )
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
             }
+            .padding(UsageDesign.Spacing.large)
         }
-        .padding(24)
-        .frame(width: 440)
+        .frame(width: 460)
+    }
+
+    private var canSave: Bool {
+        !isSaving
+            && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (mode == .live || endedAt > startedAt)
     }
 }
 

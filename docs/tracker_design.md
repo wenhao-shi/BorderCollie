@@ -33,17 +33,29 @@ The current Codex screen defines the product standard for future trackers:
 - The sidebar contains one tab per tracker.
 - The detail window header title is the tracker name, for example `Codex`.
 - Do not repeat the tracker name as a large heading in the detail body.
-- Auth implementation details are not shown during normal operation.
+- Auth implementation details are not shown in any user-facing string, in the
+  happy path or in an error. "Not signed in to Codex", never "No Codex OAuth
+  credentials found".
 - Usage percentages and progress bars represent usage consumed.
-- The agent's brand icon sits left of the usage rows, aligned horizontally.
+- The detail body is a grouped `Form` that fills its pane. The section header
+  carries the agent's brand icon and name; the footer carries extra-usage and
+  the updated timestamp. Do not lay the body out as a fixed-width card pinned to
+  the top-left corner — the pane is as wide as the Usage dashboard's.
 - Each usage window is shown as:
   - A human label, such as `5h` or `7d`.
   - Used percentage, not remaining percentage.
   - An absolute reset time. See
     `docs/claude-oauth-refresh-and-usage-ui.md` for the precision rules.
-  - A native SwiftUI `ProgressView` bar.
-- Main window and menu bar share `UsageLimitsGrid` so the two surfaces cannot
-  drift apart in wording or column alignment.
+  - A native SwiftUI `ProgressView` bar, tinted by `Double.quotaTint` so a bar
+    near its limit reads differently from an idle one. Colour reinforces the
+    percentage text and is never the only channel carrying the value.
+- The window and the menu bar use different layouts on purpose: a 360-point
+  popover and a full-width pane do not want the same one. The window uses the
+  `Form`; the menu bar uses the compact `UsageLimitsGrid`. What must not drift is
+  the *wording*, which lives on `UsageLimitDisplay` (`percentageText`,
+  `resetLabel(for:)`) — put any new user-facing string there, not in a view.
+- Unavailable states are `ContentUnavailableView` with a Refresh action, never a
+  bare headline-plus-body stack.
 - The updated timestamp is static for a given query result. It updates only when
   a refresh succeeds or fails with a new `queriedAt` value.
 - Manual refresh lives in the top toolbar, not inside the content card.
@@ -56,7 +68,7 @@ The menu-bar companion follows the same usage semantics in a compact format:
 
 - The menu-bar item is a SwiftUI `MenuBarExtra` with `.window` style.
 - Closing the main window keeps the process alive as a menu-bar companion and
-  hides the Dock icon until **Show Window** or a Dock reopen restores it.
+  hides the Dock icon until **Open BorderCollie** or a Dock reopen restores it.
 - The popup queries on open and refreshes every 30 seconds while visible.
 - Claude Code network calls inside that loop are gated to about once every
   60 seconds and back off for at least five minutes after HTTP 429.
@@ -389,12 +401,15 @@ types when the second tracker is implemented.
 
 Reuse the current tracker detail pattern:
 
-- Title at the top of the detail view.
-- Toolbar refresh button with `arrow.clockwise`.
+- Tracker name as `navigationTitle`, not as a heading in the body.
+- Toolbar refresh button with `arrow.clockwise`, swapping to a `ProgressView`
+  while the query is in flight.
 - Fixed 30-second auto refresh loop.
-- Usage card showing consumed percentages.
-- Native `ProgressView` bars.
-- Static `Updated at <time>` timestamp.
+- Grouped `Form` showing consumed percentages, filling the pane.
+- Native `ProgressView` bars, threshold-tinted.
+- Static `Updated at <time>` timestamp in the section footer.
+- Every radius, spacing value, and metric font from `UsageDesign`; no new
+  literals.
 - Preview with mock quota data and auto refresh disabled.
 
 For the menu bar, reuse the compact companion pattern:
@@ -418,8 +433,9 @@ Reuse these rules:
 - Choose reset precision by distance to the reset, not by window length. One
   rule in `UsageResetFormatting` covers every tracker; do not add per-window
   formatting styles.
-- Do not show credential details in the happy path.
+- Do not show credential details in any user-facing string.
 - Compact menu-bar summaries should use whole-number used percentages.
+- Numbers that change on refresh use `.contentTransition(.numericText())`.
 
 ### View Model Behavior
 

@@ -82,6 +82,23 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
         UsageResetFormatting.text(forResetsAt: resetsAt, now: now, timeZone: timeZone)
     }
 
+    /// The user-facing reset phrase. The window and the menu bar lay their rows
+    /// out differently but must never word this differently, so it lives on the
+    /// model rather than in either view.
+    ///
+    /// Absolute reset time rather than a countdown: it stays correct between
+    /// refreshes, where a countdown silently drifts.
+    static func resetLabel(
+        for limit: UsageLimitDisplay,
+        now: Date = Date(),
+        timeZone: TimeZone = .current
+    ) -> String {
+        guard let reset = limit.resetText(now: now, timeZone: timeZone) else {
+            return "—"
+        }
+        return "resets \(reset)"
+    }
+
     private func usedPercentage(from utilization: Double?) -> Double {
         guard let utilization else {
             return 0

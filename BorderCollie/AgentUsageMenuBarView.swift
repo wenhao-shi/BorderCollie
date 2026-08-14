@@ -48,16 +48,24 @@ struct AgentUsageMenuBarView: View {
         }
     }
 
+    /// Swaps to a `ProgressView` while refreshing, matching the three other
+    /// refresh controls in the app. It used to dim the icon to 45% instead.
     private var refreshButton: some View {
         Button {
             Task {
                 await viewModel.refresh()
             }
         } label: {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: 24, height: 24)
-                .opacity(viewModel.isRefreshing ? 0.45 : 1)
+            Group {
+                if viewModel.isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 15, weight: .medium))
+                }
+            }
+            .frame(width: 24, height: 24)
         }
         .buttonStyle(.borderless)
         .disabled(viewModel.isRefreshing)
@@ -65,25 +73,25 @@ struct AgentUsageMenuBarView: View {
         .help("Refresh")
     }
 
+    /// Hover-highlighted rows rather than tinted borderless buttons, which read
+    /// as links in a surface where every other menu-bar extra shows menu items.
     private var footerActions: some View {
-        VStack(spacing: 2) {
-            Button("Show Window") {
-                showMainWindow()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(spacing: 0) {
+            MenuBarActionRow(title: "Open BorderCollie", action: showMainWindow)
 
-            Button("Quit BorderCollie") {
-                BorderCollieAppActivation.quit()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            MenuBarActionRow(
+                title: "Quit BorderCollie",
+                shortcutHint: "⌘Q",
+                action: BorderCollieAppActivation.quit
+            )
+            .keyboardShortcut("q", modifiers: .command)
         }
-        .buttonStyle(.borderless)
     }
 
     /// Icon on the left, usage on the right. The icon identifies the agent, so
     /// the name is carried only as an accessibility label.
     private func usageRow(_ row: MenuBarUsageRow) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: UsageDesign.Spacing.medium) {
             AgentIconView(icon: row.icon, size: 28)
 
             if row.limits.isEmpty {
@@ -99,9 +107,11 @@ struct AgentUsageMenuBarView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(UsageDesign.Spacing.small + 2)
+        // `.quaternary` over the popover's own material. `controlBackgroundColor`
+        // is the backdrop drawn *behind* controls, and using it here laid an
+        // opaque card on top of the material the popover already provides.
+        .background(.quaternary, in: UsageDesign.cardShape)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(row.title). \(row.detail)")
     }
@@ -164,6 +174,38 @@ struct AgentUsageMenuBarView: View {
 private extension AgentUsageMenuBarView {
     static var isRunningInXcodePreview: Bool {
         ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+}
+
+/// A menu-item row for the window-style menu bar extra: full-width hit target,
+/// hover highlight, no tint.
+private struct MenuBarActionRow: View {
+    let title: String
+    var shortcutHint: String?
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                if let shortcutHint {
+                    Text(shortcutHint)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, UsageDesign.Spacing.small)
+            .padding(.vertical, 5)
+            .background(
+                isHovering ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
+                in: UsageDesign.inlineShape
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
     }
 }
 

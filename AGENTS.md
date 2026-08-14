@@ -18,6 +18,9 @@
 - `BorderCollie/BorderCollieApp.swift`: app entry point.
 - `BorderCollie/AppDelegate.swift`: keep-alive + Dock/menu-bar activation policy.
 - `BorderCollie/ContentView.swift`: root sidebar/detail navigation.
+- `BorderCollie/UsageDesign.swift`: the shared visual scale (corner radii,
+  spacing, metric fonts), the `MetricTile` used by every metric surface, and the
+  quota threshold tint.
 - `BorderCollie/AgentUsageMenuBarView.swift`: menu-bar usage popup UI.
 - `BorderCollie/MenuBarUsageViewModel.swift`: menu-bar refresh orchestration,
   row state, and compact provider summaries.
@@ -115,10 +118,40 @@ are prepared for the app UI to launch.
 - The menu-bar popup shows all tracked agents in compact used format:
   `Codex 5h: 20% | 7d: 10%`, `Cursor Auto: 5% | API: 40%`, and
   `Claude Code 5h: 48% | 7d: 64%`.
-- Use native SwiftUI `ProgressView` bars.
+- Use native SwiftUI `ProgressView` bars, tinted by `Double.quotaTint` so a bar
+  near its limit reads differently from an idle one. Colour only reinforces the
+  percentage text; it is never the sole channel.
 - Keep updated time static until the next refresh.
-- Do not show auth implementation details in the happy path.
+- Do not show auth implementation details in any user-facing string, happy path
+  or error path. "Not signed in to Codex", not "No Codex OAuth credentials".
 - Disable live refresh/network behavior in previews.
+- The window renders quota in a grouped `Form`; the menu bar uses the compact
+  `UsageLimitsGrid`. The two layouts are deliberately different — a 360-point
+  popover and a full-width pane do not want the same one. Shared *wording* lives
+  on `UsageLimitDisplay` (`percentageText`, `resetLabel(for:)`), which is the
+  thing that must not drift.
+
+## Presentation Standard
+
+- Every radius, spacing value, and metric font comes from `UsageDesign`. Do not
+  introduce a new literal; add a token or reuse one.
+- Rounded shapes use `.continuous`. `RoundedRectangle(cornerRadius:)` alone
+  defaults to `.circular`, which is not the curve AppKit draws.
+- One metric presentation: `MetricTile`. It draws no background; containers
+  supply one, normally a `GroupBox`.
+- Titled containers are `GroupBox`, not a `Text(...).font(.headline)` stacked
+  above a `.quaternary` rectangle.
+- Sentence case everywhere. No all-caps labels — they appear nowhere in macOS
+  system UI.
+- Display-size numbers use SF Pro at a regular weight (`Font.heroValue`), not
+  SF Rounded.
+- Numbers that change on refresh use `.contentTransition(.numericText())`.
+- Empty and error states are `ContentUnavailableView` with a recovery action.
+- The window owns its size contract at the `Window` scene. Detail views must not
+  declare their own `minWidth`, or selecting a sidebar item rewrites the
+  window's minimum size.
+- Nothing may nest a scroll view inside another. `Table` brings its own, so
+  either size it to its rows or let it own the pane.
 
 ## Historical Usage Backend Standard
 
@@ -191,6 +224,24 @@ are prepared for the app UI to launch.
   300 seconds after 429.
 - Prevention: do not poll the Claude OAuth usage endpoint more often than
   about once every 60 seconds across the app window and menu bar.
+
+### Symptom: `RuleMark` chain fails with "no member 'lineStyle'" on `some Chart3DContent`
+
+- Root cause: on macOS 26 `RuleMark` conforms to both `ChartContent` and
+  `Chart3DContent`, and `foregroundStyle(_:)` exists on both. Leading a modifier
+  chain with it resolves the whole chain to the 3D overload.
+- Fix: apply a 2D-only modifier first (`lineStyle`), or pin the builder result
+  to `some ChartContent`.
+- Prevention: when a mark type is shared between 2D and 3D charts, do not start
+  its chain with an ambiguous modifier.
+
+### Symptom: stacked chart series jump when one agent is idle
+
+- Root cause: Swift Charts stacks by matching x values, and agents only produce
+  chart points for buckets they were active in.
+- Fix: `UsageChartInteraction.densified(series:)` puts every series on the union
+  of all timestamps, filling absences with zero, before smoothing.
+- Prevention: any new series added to the chart must go through the same grid.
 
 ### Symptom: usage percentage appears inverted
 
@@ -341,6 +392,53 @@ Read `docs/tracker_design.md` before adding another tracker.
 
 Read `docs/menubar-item-design.me` before changing the menu-bar companion UI or
 adding another tracker row there.
+
+### Decision: stack the daily chart instead of overlaying four areas
+
+- Context: each agent drew an `AreaMark` from a zero baseline at 0.22 alpha, so
+  four active agents produced up to five composite tints and a reading order set
+  by draw order.
+- Alternatives considered: lines only with an area fill on the focused series.
+- Rationale: the series sum to a meaningful quantity (total cost, total tokens),
+  so the stack is the truthful form and its top edge doubles as the period
+  total. Selection moved to x-only as a consequence: in a stack, a point's
+  on-screen height is the running total, so 2D hit-testing would select by a
+  coordinate that no longer means what the reader thinks. The callout reports
+  every series at the selected x plus the total.
+
+### Decision: the agent filter is a toolbar menu, not the chart legend
+
+- Context: the legend's colour dots mutated `enabledAgents`, which re-runs the
+  store aggregate — a query-scope control with no hover, focus ring, or any
+  affordance that it was clickable.
+- Alternatives considered: `Toggle`s with `.toggleStyle(.button)` in a
+  `ControlGroup`.
+- Rationale: period and agents both scope the query, so they belong together in
+  the toolbar; metric and grouping choose a view of the result and stay inline.
+  The chart regained a real, non-interactive legend via
+  `chartForegroundStyleScale`.
+
+### Decision: Evaluations keeps `HSplitView` rather than becoming a third column
+
+- Context: the run list used `.listStyle(.sidebar)` inside the detail column,
+  putting a second thing that looks like a source list beside the real one.
+- Alternatives considered: promoting it to a three-column
+  `NavigationSplitView`.
+- Rationale: nesting a `NavigationSplitView` inside another one's detail column
+  fights over toolbar merging and column visibility, and the other four sidebar
+  destinations have nothing to put in a content column. `HSplitView` is a real
+  `NSSplitView`; the defect was the sidebar styling, so that is what changed
+  (`.listStyle(.inset)`), along with moving the run name to `navigationTitle`
+  and Stop into the toolbar.
+
+### Decision: import issues open a popover instead of listing four in the footer
+
+- Context: `prefix(4)` truncated the list with no way to reach the rest, and at
+  caption weight an `xmark.octagon` read the same as a timestamp.
+- Alternatives considered: an alert on refresh.
+- Rationale: import failures are about the index, not about the numbers on
+  screen; coverage caveats stay in the footer because they qualify those
+  numbers. The popover shows every issue.
 
 When adding future trackers, preserve:
 

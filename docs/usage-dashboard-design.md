@@ -521,56 +521,94 @@ Add one `Usage` sidebar destination above the individual trackers. Preserve the
 native `NavigationSplitView` source-list appearance and stable selection model.
 Do not turn the dashboard into a separate window or modal flow.
 
+The sidebar groups its destinations into `History` (Usage, Evaluations) and
+`Live quota` (Codex, Cursor, Claude Code): they hold different data and refresh
+on different clocks, so they are labelled rather than run together in one flat
+list.
+
+The window owns its size contract at the `Window` scene
+(`defaultSize` + `windowResizability`). Detail views must not declare their own
+`minWidth` — doing so makes selecting a sidebar item rewrite the window's
+minimum size.
+
 ### Detail Layout
 
 The detail is a vertically scrolling dashboard with system-adaptive colors:
 
+Controls are placed by what they affect. Period and enabled agents scope the
+query that runs against the store, so both live in the toolbar. Chart metric and
+breakdown grouping choose a view of the loaded result, so each sits beside the
+thing it changes. Do not add a fourth control altitude.
+
 1. Toolbar
    - 24h/7d/30d segmented picker.
+   - `Agents` filter menu with a checkmark per agent and a `Show All Agents`
+     item. The icon takes its `.fill` variant while a filter is active.
    - Manual Refresh action.
 2. Header summary
-   - Estimated API-equivalent token cost.
+   - Estimated API-equivalent token cost, sentence-case label, SF Pro at a
+     regular weight (`Font.heroValue`). Not SF Rounded, not all-caps.
    - Exact visible date interval.
-   - Pricing/coverage annotation.
+   - Pricing/coverage annotation, plus an `info.circle` beside the figure
+     carrying the unpriced-event explanation where the figure is.
 3. Hourly/daily chart
    - `Cost` / `Tokens` segmented picker.
    - Use local-hour buckets over an exact rolling 24-hour interval for `24h`;
      use local-calendar day buckets for `7d` and `30d`.
    - Preserve partial first/current-hour buckets and fill missing chart buckets
      with zero without changing the calendar-day breakdown.
-   - One series for each enabled agent.
-   - Toggleable legend entries for Claude Code, Codex, OpenCode, and Pi.
+   - **Stacked** `AreaMark` bands, one per enabled agent, at 0.2–0.4 opacity
+     applied to the mark rather than to the style scale, so legend swatches keep
+     full saturation. Do not draw overlapping areas from a shared zero baseline:
+     four translucent fills produce up to five composite tints and a reading
+     order set by draw order. The series sum to a meaningful quantity, so the
+     stack is the truthful form and its top edge doubles as the period total.
+   - Colours come from one `chartForegroundStyleScale`, ordered for contrast
+     between *adjacent* bands. No series may use `labelColor`: a series drawn in
+     the text colour reads as chrome.
+   - Every series must go through `UsageChartInteraction.densified(series:)`
+     before smoothing. Swift Charts stacks by matching x values, so an agent idle
+     in a bucket must carry a zero there rather than be absent.
    - Hide zero-valued agents for the active chart metric. An unpriced agent is
      absent from Cost mode but remains visible in Tokens mode.
-   - While the pointer is within 14 points of a visible series, show a selected
-     point with dashed guides to both axes and an agent/date/value annotation.
-     Leaving the curve or plot clears the selection.
-   - Hover hit-testing uses only enabled, nonzero series; a legend-hidden series
-     must not capture the pointer.
-   - Group line and area marks by agent and use non-overshooting interpolation;
-     token and cost curves must never render below zero.
-4. Metric strip
-   - Total tokens.
-   - `in`.
-   - `cache-write`.
-   - `cache-read`.
-   - `out`, with optional `includes <reasoning>` detail.
-   - Input cache-hit rate.
-   - Output share.
-   - Use explicit 8/4/2/1-column responsive layouts. Every breakpoint divides
-     the eight metrics evenly, so the strip never leaves an empty grid slot or
-     a partially filled final row.
+   - Selection is x-only (`chartXSelection`), snapped to a drawn sample. In a
+     stack a point's on-screen height is the running total, so two-dimensional
+     hit-testing would select by a coordinate that no longer means what the
+     reader thinks. The callout reports every visible series at that x plus the
+     total, positioned by `AnnotationOverflowResolution` rather than by
+     hand-measured geometry.
+   - Use non-overshooting interpolation; token and cost curves must never render
+     below zero.
+4. Token accounting
+   - Total tokens and cost as aggregates.
+   - `in`, `cache-write`, `cache-read`, and `out` (with optional
+     `includes <reasoning>` detail) drawn as one proportional composition bar
+     summing to Total, with each value swatched to its band. These four are parts
+     of a whole, not unrelated categories, so the bar uses one hue at four steps
+     rather than a categorical palette that would compete with the agent colours
+     above it.
+   - Input cache-hit rate and output share as derived ratios.
+   - All eight values stay visible. Do not flatten them back into eight
+     identical tiles: that hides the arithmetic relating them.
 5. Breakdown table
    - Model mode: agent, model, `in`, `cache-write`, `cache-read`, `out`, total,
      cost, cost share, input cache-hit rate, and output share.
    - Day mode: the same detailed accounting grouped by local calendar day.
+   - Sortable by every column, `.inset(alternatesRowBackgrounds:)`, with
+     `TableColumnCustomization` so columns can be hidden instead of all being
+     squeezed. Size the table to its rows; it must not open a second scroll
+     region inside the page's.
 6. Coverage/error footer
    - Unpriced and partial event counts.
    - Last successful import time.
+   - Import failures are *not* footnotes here. They are about the index rather
+     than the numbers on screen, and they must never be truncated: surface them
+     through a popover listing every issue.
 
 Use native Swift Charts for the hourly/daily visualization and native table/list
-behavior for the breakdown. Detail cards may use semantic system surfaces; the
-sidebar and root split panes retain their system backgrounds.
+behavior for the breakdown. Titled containers are `GroupBox`. Every radius,
+spacing value, and metric font comes from `UsageDesign`, and every metric is a
+`MetricTile`. The sidebar and root split panes retain their system backgrounds.
 
 ### State Ownership
 
@@ -618,6 +656,9 @@ BorderCollie/UsageDashboard/
   UsageMetricStrip.swift
   UsageBreakdownTable.swift
 ```
+
+The shared visual scale lives one level up, at `BorderCollie/UsageDesign.swift`,
+because the menu-bar and tracker surfaces draw from it too.
 
 `UsageSourceImporter` is justified because it has four real implementations.
 Do not introduce separate factories, repositories, or provider interfaces

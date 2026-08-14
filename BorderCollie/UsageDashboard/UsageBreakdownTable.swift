@@ -4,8 +4,11 @@ struct UsageBreakdownTable: View {
     let aggregate: UsageAggregate
     @Binding var mode: UsageBreakdownMode
 
+    @State private var sortOrder = [KeyPathComparator(\Row.totalTokens, order: .reverse)]
+    @State private var columnCustomization = TableColumnCustomization<Row>()
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.medium) {
             HStack {
                 Text("Breakdown")
                     .font(.headline)
@@ -14,16 +17,16 @@ struct UsageBreakdownTable: View {
 
                 Picker("Breakdown grouping", selection: $mode) {
                     ForEach(UsageBreakdownMode.allCases) { option in
-                        Text(option.label.uppercased()).tag(option)
+                        Text(option.label).tag(option)
                     }
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 140)
+                .fixedSize()
             }
 
-            Table(rows) {
-                TableColumn(mode == .model ? "Model" : "Day") { row in
+            Table(rows, sortOrder: $sortOrder, columnCustomization: $columnCustomization) {
+                TableColumn(mode == .model ? "Model" : "Day", value: \.title) { row in
                     HStack(spacing: 9) {
                         if let agent = row.agent {
                             UsageAgentIconView(agent: agent, size: 15)
@@ -41,28 +44,33 @@ struct UsageBreakdownTable: View {
                     .accessibilityElement(children: .combine)
                 }
                 .width(min: 220, ideal: 420)
+                .customizationID("title")
 
-                TableColumn("Total") { row in
+                TableColumn("Total", value: \.totalTokens) { row in
                     tokenText(row.totalTokens)
                 }
                 .width(min: 70, ideal: 90)
+                .customizationID("total")
 
-                TableColumn("In") { row in
+                TableColumn("In", value: \.inputTokens) { row in
                     tokenText(row.inputTokens)
                 }
                 .width(min: 65, ideal: 82)
+                .customizationID("in")
 
-                TableColumn("Cache write") { row in
+                TableColumn("Cache write", value: \.cacheWriteTokens) { row in
                     tokenText(row.cacheWriteTokens)
                 }
                 .width(min: 82, ideal: 105)
+                .customizationID("cacheWrite")
 
-                TableColumn("Cache read") { row in
+                TableColumn("Cache read", value: \.cacheReadTokens) { row in
                     tokenText(row.cacheReadTokens)
                 }
                 .width(min: 82, ideal: 105)
+                .customizationID("cacheRead")
 
-                TableColumn("Out") { row in
+                TableColumn("Out", value: \.outputTokens) { row in
                     tokenText(row.outputTokens)
                         .help(
                             row.reasoningOutputTokens > 0
@@ -71,46 +79,53 @@ struct UsageBreakdownTable: View {
                         )
                 }
                 .width(min: 65, ideal: 82)
+                .customizationID("out")
 
-                TableColumn("Cost") { row in
+                TableColumn("Cost", value: \.costNanodollars) { row in
                     Text(row.costText)
                         .monospacedDigit()
                         .foregroundStyle(row.hasPartialPricing ? .secondary : .primary)
                         .help(row.hasPartialPricing ? "This subtotal excludes unpriced events." : "All complete events in this row are priced.")
                 }
                 .width(min: 85, ideal: 110)
+                .customizationID("cost")
 
-                TableColumn("Cost share") { row in
+                TableColumn("Cost share", value: \.costNanodollars) { row in
                     Text(row.costShareText)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 72, ideal: 88)
+                .customizationID("costShare")
 
-                TableColumn("Input cache hit") { row in
+                TableColumn("Input cache hit", value: \.sortableInputCacheHitRate) { row in
                     Text(UsageDashboardFormatting.percent(row.inputCacheHitRate))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .help("cache-read ÷ observed input")
                 }
                 .width(min: 95, ideal: 115)
+                .customizationID("inputCacheHit")
 
-                TableColumn("Output share") { row in
+                TableColumn("Output share", value: \.sortableOutputShare) { row in
                     Text(UsageDashboardFormatting.percent(row.outputShare))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .help("out ÷ total")
                 }
                 .width(min: 90, ideal: 105)
+                .customizationID("outputShare")
             }
-            .frame(minHeight: 220, idealHeight: tableHeight, maxHeight: tableHeight)
+            .tableStyle(.inset(alternatesRowBackgrounds: true))
+            .frame(height: tableHeight)
         }
     }
 
     private var rows: [Row] {
+        let unsorted: [Row]
         switch mode {
         case .model:
-            return aggregate.models.filter { $0.totalTokens > 0 }.map { item in
+            unsorted = aggregate.models.filter { $0.totalTokens > 0 }.map { item in
                 Row(
                     id: item.id,
                     title: item.modelID,
@@ -128,7 +143,7 @@ struct UsageBreakdownTable: View {
                 )
             }
         case .day:
-            return UsageDashboardPresentation.dayBreakdown(from: aggregate).map { item in
+            unsorted = UsageDashboardPresentation.dayBreakdown(from: aggregate).map { item in
                 Row(
                     id: String(item.day.timeIntervalSince1970),
                     title: UsageDashboardFormatting.date(item.day),
@@ -146,10 +161,15 @@ struct UsageBreakdownTable: View {
                 )
             }
         }
+        return unsorted.sorted(using: sortOrder)
     }
 
+    /// Sized to its rows so the table does not open a second scroll region
+    /// inside the page's. Thirty days of rows fit without one.
     private var tableHeight: CGFloat {
-        min(max(CGFloat(rows.count) * 42 + 32, 220), 460)
+        let header: CGFloat = 28
+        let row: CGFloat = 30
+        return min(max(CGFloat(rows.count) * row + header, 220), 980)
     }
 
     private func tokenText(_ value: Int64) -> some View {
@@ -158,7 +178,7 @@ struct UsageBreakdownTable: View {
             .foregroundStyle(.secondary)
     }
 
-    private struct Row: Identifiable {
+    fileprivate struct Row: Identifiable {
         let id: String
         let title: String
         let agent: UsageAgent?
@@ -199,5 +219,10 @@ struct UsageBreakdownTable: View {
         var outputShare: Double? {
             totalTokens == 0 ? nil : Double(outputTokens) / Double(totalTokens)
         }
+
+        /// `KeyPathComparator` needs a non-optional key path; rows with no
+        /// observed input sort below every real ratio rather than alongside 0%.
+        var sortableInputCacheHitRate: Double { inputCacheHitRate ?? -1 }
+        var sortableOutputShare: Double { outputShare ?? -1 }
     }
 }

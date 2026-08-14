@@ -9,6 +9,8 @@ struct UsageDashboardView: View {
         .map(\.rawValue)
         .joined(separator: ",")
 
+    @State private var showsImportIssues = false
+
     private let runsInitialLoad: Bool
 
     @MainActor
@@ -34,18 +36,22 @@ struct UsageDashboardView: View {
                 unavailableState
             }
         }
-        .frame(minWidth: 900, minHeight: 600, alignment: .topLeading)
         .navigationTitle("Usage")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                // Period and agents both scope the query that runs against the
+                // store, so they sit together here. Metric and grouping choose a
+                // view of the result and stay beside the things they change.
                 Picker("Tracking period", selection: $rangeRawValue) {
                     ForEach(UsageDateRange.allCases, id: \.self) { range in
                         Text(range.shortLabel).tag(range.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 180)
+                .fixedSize()
                 .accessibilityLabel("Tracking period")
+
+                agentFilterMenu
 
                 Button {
                     Task {
@@ -77,20 +83,20 @@ struct UsageDashboardView: View {
 
     private func dashboard(_ aggregate: UsageAggregate) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.section) {
                 if let errorMessage = model.errorMessage {
                     statusBanner(errorMessage, systemImage: "exclamationmark.triangle")
                 }
 
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 34) {
+                    HStack(alignment: .top, spacing: UsageDesign.Spacing.section + UsageDesign.Spacing.small) {
                         UsageCostSummary(aggregate: aggregate)
                             .frame(width: 310)
                         dailyChart(aggregate)
                             .frame(minWidth: 470)
                     }
 
-                    VStack(alignment: .leading, spacing: 26) {
+                    VStack(alignment: .leading, spacing: UsageDesign.Spacing.section) {
                         UsageCostSummary(aggregate: aggregate)
                         dailyChart(aggregate)
                     }
@@ -111,7 +117,7 @@ struct UsageDashboardView: View {
 
                 coverageFooter(aggregate)
             }
-            .padding(28)
+            .padding(UsageDesign.Spacing.section)
             .frame(maxWidth: 1_500, alignment: .topLeading)
         }
     }
@@ -121,7 +127,58 @@ struct UsageDashboardView: View {
             aggregate: aggregate,
             range: selectedRange,
             metric: chartMetricBinding,
-            enabledAgents: enabledAgentsBinding
+            enabledAgents: enabledAgents
+        )
+    }
+
+    /// The agent filter used to be the chart's legend: eight-point dots with a
+    /// 0.35-opacity off state, no hover, no focus ring, and no hint that a click
+    /// re-runs the query. It is a scope control, so it lives with the other one.
+    private var agentFilterMenu: some View {
+        Menu {
+            ForEach(UsageAgent.dashboardOrder, id: \.self) { agent in
+                Toggle(isOn: binding(for: agent)) {
+                    Label {
+                        Text(agent.displayName)
+                    } icon: {
+                        UsageAgentIconView(agent: agent, size: 14)
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("Show All Agents") {
+                enabledAgentsBinding.wrappedValue = Set(UsageAgent.allCases)
+            }
+            .disabled(enabledAgents.count == UsageAgent.allCases.count)
+        } label: {
+            Label(
+                "Agents",
+                systemImage: isFiltered
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle"
+            )
+        }
+        .help(isFiltered ? "Showing \(enabledAgents.count) of \(UsageAgent.allCases.count) agents" : "Filter agents")
+    }
+
+    private var isFiltered: Bool {
+        enabledAgents.count < UsageAgent.allCases.count
+    }
+
+    private func binding(for agent: UsageAgent) -> Binding<Bool> {
+        Binding(
+            get: { enabledAgents.contains(agent) },
+            set: { isEnabled in
+                var agents = enabledAgents
+                if isEnabled {
+                    agents.insert(agent)
+                } else {
+                    agents.remove(agent)
+                }
+                enabledAgentsBinding.wrappedValue = agents
+            }
         )
     }
 
@@ -142,42 +199,100 @@ struct UsageDashboardView: View {
         }
     }
 
+    /// Coverage caveats qualify the numbers above, so they stay here. Import
+    /// failures do not — they are about the index, they were being truncated at
+    /// four with no way to reach the rest, and at caption weight an
+    /// `xmark.octagon` read the same as a timestamp. They moved to the button.
     private func coverageFooter(_ aggregate: UsageAggregate) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            if aggregate.coverage.partialEvents > 0 {
-                Label(
-                    "\(aggregate.coverage.partialEvents) partial event\(aggregate.coverage.partialEvents == 1 ? " was" : "s were") excluded from token and cost totals.",
-                    systemImage: "exclamationmark.circle"
-                )
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.small) {
+            if !model.importIssues.isEmpty {
+                importIssuesButton
             }
-            if aggregate.coverage.unpricedCompleteEvents > 0 {
-                Label(
-                    "\(aggregate.coverage.unpricedCompleteEvents) complete event\(aggregate.coverage.unpricedCompleteEvents == 1 ? " has" : "s have") no verified public price; token totals include them and cost totals do not.",
-                    systemImage: "dollarsign.circle"
-                )
+
+            VStack(alignment: .leading, spacing: 7) {
+                if aggregate.coverage.partialEvents > 0 {
+                    Label(
+                        "\(aggregate.coverage.partialEvents) partial event\(aggregate.coverage.partialEvents == 1 ? " was" : "s were") excluded from token and cost totals.",
+                        systemImage: "exclamationmark.circle"
+                    )
+                }
+                if aggregate.coverage.unpricedCompleteEvents > 0 {
+                    Label(
+                        "\(aggregate.coverage.unpricedCompleteEvents) complete event\(aggregate.coverage.unpricedCompleteEvents == 1 ? " has" : "s have") no verified public price; token totals include them and cost totals do not.",
+                        systemImage: "dollarsign.circle"
+                    )
+                }
+                if let updated = model.lastSuccessfulImport {
+                    Text("Last imported at \(updated, style: .time)")
+                }
             }
-            ForEach(Array(model.importIssues.prefix(4).enumerated()), id: \.offset) { _, issue in
-                Label("\(issue.agent.displayName): \(issue.message)", systemImage: issue.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
-            }
-            if model.importIssues.count > 4 {
-                Text("\(model.importIssues.count - 4) additional import issues")
-            }
-            if let updated = model.lastSuccessfulImport {
-                Text("Last imported at \(updated, style: .time)")
-            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
         .accessibilityElement(children: .contain)
+    }
+
+    private var importIssuesButton: some View {
+        Button {
+            showsImportIssues = true
+        } label: {
+            Label(
+                "\(model.importIssues.count) import issue\(model.importIssues.count == 1 ? "" : "s")",
+                systemImage: hasImportError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(hasImportError ? .red : .orange)
+        }
+        .buttonStyle(.link)
+        .popover(isPresented: $showsImportIssues, arrowEdge: .bottom) {
+            importIssuesList
+        }
+    }
+
+    private var importIssuesList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.medium) {
+                Text("Import issues")
+                    .font(.headline)
+
+                ForEach(Array(model.importIssues.enumerated()), id: \.offset) { _, issue in
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(issue.agent.displayName)
+                                .font(.callout.weight(.medium))
+                            Text(issue.message)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } icon: {
+                        Image(systemName: issue.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(issue.severity == .error ? .red : .orange)
+                    }
+                }
+
+                Text("Each agent imports independently, so the other agents' history is still up to date.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(UsageDesign.Spacing.large)
+            .frame(width: 380, alignment: .leading)
+        }
+        .frame(maxHeight: 420)
+    }
+
+    private var hasImportError: Bool {
+        model.importIssues.contains { $0.severity == .error }
     }
 
     private func statusBanner(_ message: String, systemImage: String) -> some View {
         Label(message, systemImage: systemImage)
             .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(12)
+            .symbolRenderingMode(.multicolor)
+            .padding(UsageDesign.Spacing.medium)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            .background(.quaternary, in: UsageDesign.cardShape)
+            .overlay(UsageDesign.cardShape.stroke(.separator))
     }
 
     private var selectedRange: UsageDateRange {
@@ -226,15 +341,31 @@ private struct UsageCostSummary: View {
     let aggregate: UsageAggregate
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("ESTIMATED API-EQUIVALENT TOKEN COST")
-                    .font(.caption.weight(.medium))
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.large) {
+            VStack(alignment: .leading, spacing: UsageDesign.Spacing.tight) {
+                // Sentence case and SF Pro at a regular weight: all-caps labels
+                // and SF Rounded are iOS-widget vernacular, and neither appears
+                // in macOS system UI.
+                Text("Estimated API-equivalent token cost")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                Text(costText)
-                    .font(.system(size: 38, weight: .semibold, design: .rounded).monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+
+                HStack(alignment: .firstTextBaseline, spacing: UsageDesign.Spacing.small) {
+                    Text(costText)
+                        .font(.heroValue)
+                        .contentTransition(.numericText())
+                        .animation(.smooth(duration: 0.32), value: aggregate.estimatedCostNanodollars)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+
+                    if aggregate.coverage.unpricedCompleteEvents > 0 {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .help(unpricedExplanation)
+                            .accessibilityLabel(unpricedExplanation)
+                    }
+                }
+
                 Text(
                     aggregate.range == .oneDay
                         ? UsageDashboardFormatting.rollingInterval(aggregate.interval)
@@ -242,19 +373,21 @@ private struct UsageCostSummary: View {
                 )
                     .font(.callout)
                     .foregroundStyle(.secondary)
+
                 Text("Token-only estimate at public API rates")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
 
             ForEach(summaries) { summary in
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: UsageDesign.Spacing.small) {
+                    HStack(spacing: UsageDesign.Spacing.small) {
                         UsageAgentIconView(agent: summary.agent, size: 17)
                         Text(summary.agent.displayName)
                         Spacer()
                         Text(summaryCostText(summary))
                             .monospacedDigit()
+                            .contentTransition(.numericText())
                     }
                     if summary.pricedEvents > 0 {
                         ProgressView(value: costShare(summary))
@@ -272,6 +405,14 @@ private struct UsageCostSummary: View {
                 .accessibilityElement(children: .combine)
             }
         }
+        .animation(.smooth(duration: 0.32), value: summaries)
+    }
+
+    /// The asterisk in the figure explained where the figure is, rather than in
+    /// the footer at the bottom of the screen.
+    private var unpricedExplanation: String {
+        let count = aggregate.coverage.unpricedCompleteEvents
+        return "\(count) complete event\(count == 1 ? " has" : "s have") no verified public price. Token totals include them; this cost does not."
     }
 
     private var summaries: [UsageAgentSummary] {

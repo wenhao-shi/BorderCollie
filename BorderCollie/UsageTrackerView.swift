@@ -51,20 +51,17 @@ struct UsageTrackerView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            quotaContent
-        }
-        .padding(24)
-        .frame(minWidth: 520, minHeight: 320, alignment: .topLeading)
-        .navigationTitle(title)
-        .task {
-            await runAutoRefreshLoop()
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                refreshToolbarButton
+        quotaContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(title)
+            .task {
+                await runAutoRefreshLoop()
             }
-        }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    refreshToolbarButton
+                }
+            }
     }
 
     private var refreshToolbarButton: some View {
@@ -79,6 +76,7 @@ struct UsageTrackerView: View {
             }
         }
         .disabled(viewModel.isLoading)
+        .keyboardShortcut("r", modifiers: .command)
     }
 
     @MainActor
@@ -112,72 +110,120 @@ struct UsageTrackerView: View {
         } else if let quota = viewModel.quota {
             switch quota.credentialStatus {
             case .notFound:
-                unavailableState(title: notFoundTitle, message: notFoundMessage)
+                unavailableState(
+                    title: notFoundTitle,
+                    message: notFoundMessage,
+                    systemImage: "person.badge.key"
+                )
             case .parseError:
                 unavailableState(
                     title: parseErrorTitle,
-                    message: quota.credentialMessage ?? "The local auth state could not be parsed."
+                    message: quota.credentialMessage ?? "The local sign-in state could not be read.",
+                    systemImage: "exclamationmark.triangle"
                 )
             case .expired where !quota.success:
                 unavailableState(
                     title: expiredTitle,
-                    message: quota.error ?? expiredMessage
+                    message: quota.error ?? expiredMessage,
+                    systemImage: "clock.badge.exclamationmark"
                 )
             case _ where !quota.success:
                 unavailableState(
                     title: "Quota query failed",
-                    message: quota.error ?? genericErrorMessage
+                    message: quota.error ?? genericErrorMessage,
+                    systemImage: "exclamationmark.triangle"
                 )
             default:
                 quotaSuccessView(quota)
             }
         } else {
-            unavailableState(title: "Ready to query", message: readyMessage)
+            unavailableState(
+                title: "Ready to query",
+                message: readyMessage,
+                systemImage: "gauge.with.dots.needle.bottom.50percent"
+            )
         }
     }
 
+    /// A grouped `Form` rather than a fixed-width card: this pane is as wide as
+    /// the Usage dashboard's, and a 520-point box pinned to its top-left corner
+    /// read as an unfinished screen.
     private func quotaSuccessView(_ quota: SubscriptionQuota) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            usageUsedSection(quota)
-
-            if let extraUsage = quota.extraUsage {
-                Label("Extra usage: \(extraUsage)", systemImage: "creditcard")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let queriedAt = quota.queriedAt {
-                Text("Updated at \(Date(timeIntervalSince1970: TimeInterval(queriedAt) / 1_000), style: .time)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+        Form {
+            Section {
+                ForEach(usageLimits(quota)) { limit in
+                    limitRow(limit)
+                }
+            } header: {
+                Label {
+                    Text(title)
+                } icon: {
+                    AgentIconView(icon: icon, size: 16)
+                }
+                .font(.headline)
+            } footer: {
+                VStack(alignment: .leading, spacing: UsageDesign.Spacing.tight) {
+                    if let extraUsage = quota.extraUsage {
+                        Label(extraUsage, systemImage: "creditcard")
+                    }
+                    if let queriedAt = quota.queriedAt {
+                        Text("Updated at \(Date(timeIntervalSince1970: TimeInterval(queriedAt) / 1_000), style: .time)")
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, UsageDesign.Spacing.tight)
             }
         }
-    }
-
-    private func usageUsedSection(_ quota: SubscriptionQuota) -> some View {
-        HStack(alignment: .center, spacing: 18) {
-            AgentIconView(icon: icon, size: 44)
-
-            UsageLimitsGrid(limits: usageLimits(quota))
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: 520, alignment: .leading)
-        .padding(16)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .accessibilityElement(children: .contain)
+        .formStyle(.grouped)
         .accessibilityLabel("\(title) usage consumed")
     }
 
-    private func unavailableState(title: String, message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            Text(message)
-                .foregroundStyle(.secondary)
+    private func limitRow(_ limit: UsageLimitDisplay) -> some View {
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.small) {
+            HStack(alignment: .firstTextBaseline, spacing: UsageDesign.Spacing.small) {
+                Text(limit.title)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+
+                Spacer(minLength: UsageDesign.Spacing.medium)
+
+                Text(limit.percentageText)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(.smooth(duration: 0.28), value: limit.usedPercentage)
+                    .foregroundStyle(limit.tier == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+
+                Text(UsageLimitDisplay.resetLabel(for: limit))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(minWidth: 104, alignment: .leading)
+            }
+
+            ProgressView(value: limit.usedPercentage, total: 100)
+                .tint(limit.usedPercentage.quotaTint)
+                .animation(.smooth(duration: 0.28), value: limit.usedPercentage)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.vertical, UsageDesign.Spacing.tight)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(limit.title)
+        .accessibilityValue("\(limit.percentageText) consumed, \(UsageLimitDisplay.resetLabel(for: limit))")
+    }
+
+    /// Native empty states carry a way out, so every one of these offers the
+    /// retry the message asks for.
+    private func unavailableState(title: String, message: String, systemImage: String) -> some View {
+        ContentUnavailableView {
+            Label(title, systemImage: systemImage)
+        } description: {
+            Text(message)
+        } actions: {
+            Button("Refresh") {
+                viewModel.refresh()
+            }
+            .disabled(viewModel.isLoading)
+        }
     }
 }
 

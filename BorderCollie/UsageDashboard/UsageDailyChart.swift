@@ -2,159 +2,52 @@ import Charts
 import SwiftUI
 
 struct UsageDailyChart: View {
-    private static let tooltipSize = CGSize(width: 160, height: 68)
-    private static let tooltipSpacing: CGFloat = 8
+    /// Adjacent stacked bands are told apart by hue contrast across their shared
+    /// boundary, and lowering alpha flattens that contrast, so this sits at the
+    /// legible end of the intended 0.2–0.4 range.
+    private static let bandOpacity = 0.4
 
     let aggregate: UsageAggregate
     let range: UsageDateRange
     @Binding var metric: UsageChartMetric
-    @Binding var enabledAgents: Set<UsageAgent>
-    @State private var hoverSelection: UsageChartHoverSelection?
+    let enabledAgents: Set<UsageAgent>
+
+    @State private var rawSelectedDate: Date?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center) {
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.medium) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(chartTitle)
                     .font(.headline)
 
                 Spacer()
 
+                // Stays beside the chart: this picks a view of the loaded
+                // result, unlike the period and agent controls in the toolbar,
+                // which change what gets loaded.
                 Picker("Chart metric", selection: $metric) {
                     ForEach(UsageChartMetric.allCases) { option in
-                        Text(option.label.uppercased()).tag(option)
+                        Text(option.label).tag(option)
                     }
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 150)
+                .fixedSize()
             }
 
-            if !chartAgents.isEmpty {
-                agentLegend
-            }
-
-            if chartAgents.isEmpty {
+            if visibleAgents.isEmpty {
                 ContentUnavailableView(
                     metric == .cost ? "No priced cost in this period" : "No token usage in this period",
-                    systemImage: "chart.xyaxis.line"
+                    systemImage: "chart.xyaxis.line",
+                    description: Text(
+                        enabledAgents.count < UsageAgent.allCases.count
+                            ? "Some agents are hidden. Show more from Agents in the toolbar."
+                            : "Nothing was recorded for the selected period."
+                    )
                 )
                 .frame(maxWidth: .infinity, minHeight: 290)
             } else {
-                Chart {
-                    ForEach(chartAgents, id: \.self) { agent in
-                        if enabledAgents.contains(agent) {
-                            ForEach(renderedPoints(for: agent)) { point in
-                                AreaMark(
-                                    x: .value("Time", point.date),
-                                    yStart: .value("Baseline", 0.0),
-                                    yEnd: .value(metric.label, point.value),
-                                    series: .value("Agent", agent.displayName)
-                                )
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [agent.chartColor.opacity(0.22), agent.chartColor.opacity(0.02)],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-                                .interpolationMethod(.linear)
-
-                                LineMark(
-                                    x: .value("Time", point.date),
-                                    y: .value(metric.label, point.value),
-                                    series: .value("Agent", agent.displayName)
-                                )
-                                .foregroundStyle(agent.chartColor)
-                                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                                .interpolationMethod(.linear)
-                                .accessibilityLabel(
-                                    "\(agent.displayName), \(timestampText(point.date)), \(metric.label.lowercased())"
-                                )
-                                .accessibilityValue(axisLabel(point.value))
-                            }
-                        }
-                    }
-
-                    if let hoverSelection {
-                        RuleMark(x: .value("Selected time", hoverSelection.date))
-                            .foregroundStyle(.secondary.opacity(0.75))
-                            .lineStyle(hoverGuideStyle)
-
-                        RuleMark(y: .value(metric.label, hoverSelection.value))
-                            .foregroundStyle(.secondary.opacity(0.75))
-                            .lineStyle(hoverGuideStyle)
-
-                        PointMark(
-                            x: .value("Selected time", hoverSelection.date),
-                            y: .value(metric.label, hoverSelection.value)
-                        )
-                        .foregroundStyle(hoverSelection.agent.chartColor)
-                        .symbolSize(55)
-                    }
-                }
-                .chartLegend(.hidden)
-                .chartXScale(domain: aggregate.interval.start...chartEnd)
-                .chartYScale(domain: .automatic(includesZero: true))
-                .chartXAxis {
-                    if range == .oneDay {
-                        AxisMarks(values: .automatic(desiredCount: 5)) {
-                            AxisGridLine().foregroundStyle(.clear)
-                            AxisTick().foregroundStyle(.tertiary)
-                            AxisValueLabel(
-                                format: .dateTime.hour(.defaultDigits(amPM: .abbreviated))
-                            )
-                            .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        AxisMarks(values: .automatic(desiredCount: 3)) {
-                            AxisGridLine().foregroundStyle(.clear)
-                            AxisTick().foregroundStyle(.tertiary)
-                            AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading) { value in
-                        AxisGridLine().foregroundStyle(.quaternary)
-                        AxisValueLabel {
-                            if let amount = value.as(Double.self) {
-                                Text(axisLabel(amount))
-                            }
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                }
-                .chartOverlay { proxy in
-                    GeometryReader { geometry in
-                        ZStack(alignment: .topLeading) {
-                            Rectangle()
-                                .fill(.clear)
-                                .contentShape(Rectangle())
-                                .onContinuousHover { phase in
-                                    updateHover(phase, proxy: proxy, geometry: geometry)
-                                }
-
-                            if let hoverSelection,
-                               let position = tooltipPosition(
-                                   for: hoverSelection,
-                                   proxy: proxy,
-                                   geometry: geometry
-                               ) {
-                                hoverAnnotation(for: hoverSelection)
-                                    .position(position)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                    }
-                }
-                .frame(minHeight: 290)
-                .onChange(of: metric) {
-                    hoverSelection = nil
-                }
-                .onChange(of: enabledAgents) {
-                    hoverSelection = nil
-                }
+                chart
             }
 
             if metric == .cost, aggregate.coverage.unpricedCompleteEvents > 0 {
@@ -168,30 +61,192 @@ struct UsageDailyChart: View {
         }
     }
 
-    private var agentLegend: some View {
-        HStack(spacing: 16) {
-            ForEach(chartAgents, id: \.self) { agent in
-                Button {
-                    toggle(agent)
-                } label: {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(agent.chartColor)
-                            .frame(width: 8, height: 8)
-                        Text(agent.displayName)
-                            .font(.caption)
-                    }
-                    .opacity(enabledAgents.contains(agent) ? 1 : 0.35)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(agent.displayName) chart series")
-                .accessibilityValue(enabledAgents.contains(agent) ? "Shown" : "Hidden")
+    /// Stacked, not overlaid. Four translucent areas sharing a zero baseline
+    /// produced up to five composite tints and an arbitrary reading order; the
+    /// series sum to a meaningful quantity, so the stack is the truthful form
+    /// and the top edge doubles as the period total.
+    private var chart: some View {
+        Chart {
+            ForEach(visibleAgents, id: \.self) { agent in
+                band(for: agent)
             }
+
+            selectionMark
+        }
+        .chartForegroundStyleScale(UsageAgent.chartStyleScale)
+        .chartLegend(position: .bottom, alignment: .leading, spacing: UsageDesign.Spacing.medium)
+        .chartXSelection(value: $rawSelectedDate)
+        .chartXScale(domain: aggregate.interval.start...chartEnd)
+        .chartYScale(domain: .automatic(includesZero: true))
+        .chartXAxis {
+            if range == .oneDay {
+                AxisMarks(values: .automatic(desiredCount: 5)) {
+                    AxisTick().foregroundStyle(.tertiary)
+                    AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                AxisMarks(values: .automatic(desiredCount: 3)) {
+                    AxisTick().foregroundStyle(.tertiary)
+                    AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel {
+                    if let amount = value.as(Double.self) {
+                        Text(axisLabel(amount))
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .frame(minHeight: 290)
+        .animation(.smooth(duration: 0.3), value: metric)
+        .animation(.smooth(duration: 0.3), value: enabledAgents)
+    }
+
+    /// `AnnotationOverflowResolution` clamps the callout inside the plot area,
+    /// which replaced hand-measured tooltip geometry against a fixed 160×68 box.
+    @ChartContentBuilder
+    private var selectionMark: some ChartContent {
+        if let snapshot {
+            // `lineStyle` before `foregroundStyle`: on macOS 26 `RuleMark`
+            // conforms to both `ChartContent` and `Chart3DContent`, and
+            // `foregroundStyle` exists on both, so leading with it resolves the
+            // chain to the 3D overload. `lineStyle` is 2D-only and pins it.
+            RuleMark(x: .value("Selected time", snapshot.date))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .annotation(
+                    position: .top,
+                    spacing: UsageDesign.Spacing.small,
+                    overflowResolution: .init(x: .fit(to: .chart), y: .disabled)
+                ) {
+                    callout(snapshot)
+                }
         }
     }
 
-    private var chartAgents: [UsageAgent] {
+    @ChartContentBuilder
+    private func band(for agent: UsageAgent) -> some ChartContent {
+        ForEach(curve(for: agent)) { point in
+            AreaMark(
+                x: .value("Time", point.date),
+                y: .value(metric.label, point.value)
+            )
+            .foregroundStyle(by: .value("Agent", agent.displayName))
+            // Applied to the mark, not to the style scale, so the legend
+            // swatches keep full saturation. The bands are stacked and
+            // therefore disjoint, so this does not composite the way the old
+            // overlapping fills did.
+            .opacity(Self.bandOpacity)
+            .interpolationMethod(.linear)
+            .accessibilityLabel(accessibilityLabel(for: agent, at: point.date))
+            .accessibilityValue(axisLabel(point.value))
+        }
+    }
+
+    private func accessibilityLabel(for agent: UsageAgent, at date: Date) -> String {
+        "\(agent.displayName), \(timestampText(date))"
+    }
+
+    /// Every visible series at the selected instant, plus their total. A stacked
+    /// chart is read across the stack, so the callout reports the whole column
+    /// rather than the one series the pointer happened to land on.
+    private func callout(_ snapshot: Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: UsageDesign.Spacing.tight) {
+            Text(timestampText(snapshot.date))
+                .font(.caption.weight(.semibold))
+
+            ForEach(snapshot.entries, id: \.agent) { entry in
+                HStack(spacing: UsageDesign.Spacing.small) {
+                    Circle()
+                        .fill(entry.agent.chartColor)
+                        .frame(width: 7, height: 7)
+                    Text(entry.agent.displayName)
+                        .font(.caption)
+                    Spacer(minLength: UsageDesign.Spacing.medium)
+                    Text(axisLabel(entry.value))
+                        .font(.caption.monospacedDigit())
+                }
+            }
+
+            if snapshot.entries.count > 1 {
+                Divider()
+                HStack(spacing: UsageDesign.Spacing.small) {
+                    Text("Total")
+                        .font(.caption.weight(.medium))
+                    Spacer(minLength: UsageDesign.Spacing.medium)
+                    Text(axisLabel(snapshot.total))
+                        .font(.caption.monospacedDigit().weight(.medium))
+                }
+            }
+        }
+        .fixedSize()
+        .padding(.horizontal, UsageDesign.Spacing.medium)
+        .padding(.vertical, UsageDesign.Spacing.small)
+        .background(.regularMaterial, in: UsageDesign.inlineShape)
+        .overlay(UsageDesign.inlineShape.stroke(.separator))
+    }
+
+    private struct Snapshot {
+        let date: Date
+        let entries: [(agent: UsageAgent, value: Double)]
+
+        var total: Double { entries.reduce(0) { $0 + $1.value } }
+    }
+
+    private var snapshot: Snapshot? {
+        guard
+            let rawSelectedDate,
+            let date = UsageChartInteraction.nearestDate(to: rawSelectedDate, in: gridDates)
+        else {
+            return nil
+        }
+
+        let entries = visibleAgents.compactMap { agent -> (agent: UsageAgent, value: Double)? in
+            guard let point = curve(for: agent).first(where: { $0.date == date }), point.value > 0 else {
+                return nil
+            }
+            return (agent, point.value)
+        }
+
+        return entries.isEmpty ? nil : Snapshot(date: date, entries: entries)
+    }
+
+    private var visibleAgents: [UsageAgent] {
         UsageDashboardPresentation.chartAgents(from: aggregate, metric: metric)
+            .filter { enabledAgents.contains($0) }
+    }
+
+    /// Densified onto a shared grid, then smoothed. Both series get the same
+    /// sample dates, which is what lets Swift Charts stack them.
+    private var curves: [UsageAgent: [UsageChartCurvePoint]] {
+        let raw = Dictionary(
+            uniqueKeysWithValues: visibleAgents.map { agent in
+                (
+                    agent,
+                    aggregate.chartPoints
+                        .filter { $0.agent == agent }
+                        .map { UsageChartCurvePoint(date: $0.timestamp, value: value(for: $0)) }
+                        .sorted { $0.date < $1.date }
+                )
+            }
+        )
+        return UsageChartInteraction.densified(series: raw)
+            .mapValues { UsageChartCurve.samples(points: $0) }
+    }
+
+    private func curve(for agent: UsageAgent) -> [UsageChartCurvePoint] {
+        curves[agent] ?? []
+    }
+
+    private var gridDates: [Date] {
+        curves.values.first.map { $0.map(\.date) } ?? []
     }
 
     private var chartTitle: String {
@@ -199,32 +254,8 @@ struct UsageDailyChart: View {
         return "\(prefix) \(metric == .cost ? "cost" : "tokens")"
     }
 
-    private func points(for agent: UsageAgent) -> [UsageChartPoint] {
-        aggregate.chartPoints.filter { $0.agent == agent }
-    }
-
-    private func renderedPoints(for agent: UsageAgent) -> [UsageChartCurvePoint] {
-        UsageChartCurve.samples(
-            points: points(for: agent).map {
-                UsageChartCurvePoint(date: $0.timestamp, value: value(for: $0))
-            }
-        )
-    }
-
     private var chartEnd: Date {
         max(aggregate.interval.start.addingTimeInterval(1), aggregate.interval.end.addingTimeInterval(-1))
-    }
-
-    private var hoverGuideStyle: StrokeStyle {
-        StrokeStyle(lineWidth: 1, dash: [5, 4])
-    }
-
-    private func toggle(_ agent: UsageAgent) {
-        if enabledAgents.contains(agent) {
-            enabledAgents.remove(agent)
-        } else {
-            enabledAgents.insert(agent)
-        }
     }
 
     private func value(for point: UsageChartPoint) -> Double {
@@ -234,98 +265,6 @@ struct UsageDailyChart: View {
         case .tokens:
             Double(point.totalTokens)
         }
-    }
-
-    private func updateHover(_ phase: HoverPhase, proxy: ChartProxy, geometry: GeometryProxy) {
-        guard case let .active(location) = phase,
-              let plotFrameAnchor = proxy.plotFrame
-        else {
-            hoverSelection = nil
-            return
-        }
-
-        let plotFrame = geometry[plotFrameAnchor]
-        guard plotFrame.contains(location) else {
-            hoverSelection = nil
-            return
-        }
-
-        let pointer = CGPoint(x: location.x - plotFrame.minX, y: location.y - plotFrame.minY)
-        let series = chartAgents.compactMap { agent -> UsageChartScreenSeries? in
-            guard enabledAgents.contains(agent) else { return nil }
-            let screenPoints = renderedPoints(for: agent).compactMap { point -> UsageChartScreenPoint? in
-                guard let position = proxy.position(for: (x: point.date, y: point.value)) else {
-                    return nil
-                }
-                return UsageChartScreenPoint(date: point.date, value: point.value, position: position)
-            }
-            guard !screenPoints.isEmpty else { return nil }
-            return UsageChartScreenSeries(agent: agent, points: screenPoints)
-        }
-
-        hoverSelection = UsageChartInteraction.nearestSelection(
-            to: pointer,
-            series: series,
-            maximumDistance: 14
-        )
-    }
-
-    private func hoverAnnotation(for selection: UsageChartHoverSelection) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(selection.agent.displayName)
-                .font(.caption.weight(.semibold))
-            Text(timestampText(selection.date))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(axisLabel(selection.value))
-                .font(.caption.monospacedDigit())
-        }
-        .lineLimit(1)
-        .padding(.horizontal, 10)
-        .frame(
-            width: Self.tooltipSize.width,
-            height: Self.tooltipSize.height,
-            alignment: .leading
-        )
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-    }
-
-    private func tooltipPosition(
-        for selection: UsageChartHoverSelection,
-        proxy: ChartProxy,
-        geometry: GeometryProxy
-    ) -> CGPoint? {
-        guard let plotFrameAnchor = proxy.plotFrame,
-              let plotPosition = proxy.position(for: (x: selection.date, y: selection.value))
-        else {
-            return nil
-        }
-
-        let plotFrame = geometry[plotFrameAnchor]
-        let point = CGPoint(
-            x: plotFrame.minX + plotPosition.x,
-            y: plotFrame.minY + plotPosition.y
-        )
-        let halfWidth = Self.tooltipSize.width / 2
-        let halfHeight = Self.tooltipSize.height / 2
-        let minimumX = plotFrame.minX + halfWidth
-        let maximumX = plotFrame.maxX - halfWidth
-        let x = minimumX <= maximumX
-            ? min(max(point.x, minimumX), maximumX)
-            : plotFrame.midX
-
-        let preferredAbove = point.y - Self.tooltipSpacing - halfHeight
-        let preferredBelow = point.y + Self.tooltipSpacing + halfHeight
-        let y: CGFloat
-        if preferredAbove >= plotFrame.minY {
-            y = preferredAbove
-        } else if preferredBelow <= plotFrame.maxY {
-            y = preferredBelow
-        } else {
-            y = plotFrame.midY
-        }
-
-        return CGPoint(x: x, y: y)
     }
 
     private func timestampText(_ date: Date) -> String {

@@ -39,25 +39,35 @@ reduced to simple commands only.
 Closing the main window does not quit the app. `AppDelegate` returns `false`
 from `applicationShouldTerminateAfterLastWindowClosed` and switches the
 activation policy to `.accessory`, which hides the Dock icon while the
-menu-bar item keeps running. Use **Show Window** to restore the Dock icon and
-main window, or **Quit BorderCollie** / Cmd+Q to exit fully.
+menu-bar item keeps running. Use **Open BorderCollie** to restore the Dock icon
+and main window, or **Quit BorderCollie** / Cmd+Q to exit fully.
 
 ## Layout
 
 The popup uses a single compact column:
 
 - Header: `Usage consumed` with a gauge icon.
-- Header action: icon-only refresh button using `arrow.clockwise`.
+- Header action: icon-only refresh button using `arrow.clockwise`, swapping to a
+  small `ProgressView` while a refresh is in flight. Do not signal the in-flight
+  state by dimming the icon; the window surfaces use the same swap.
 - Body: one row per tracked agent, with the agent's brand icon on the left and
   its usage rows on the right. The agent name is carried only as an
   accessibility label, since the icon identifies it.
 - Each usage row shows label, used percentage, absolute reset time, and a
-  progress bar.
-- Footer: `Show Window` and `Quit BorderCollie` actions for the hybrid
-  menu-bar lifecycle.
+  threshold-tinted progress bar.
+- Rows fill with `.quaternary` over the popover's own material. Do not use
+  `controlBackgroundColor`: that is the backdrop drawn *behind* controls, and it
+  lays an opaque card on top of the material the popover already provides.
+- Footer: `Open BorderCollie` and `Quit BorderCollie` (⌘Q) for the hybrid
+  menu-bar lifecycle. These are menu-item rows — full-width hit target, hover
+  highlight, no tint — not tinted borderless buttons, which read as links in a
+  surface where every other menu-bar extra shows menu items.
 
 There is no text-labeled `Refresh` button. The refresh button keeps an
 accessibility label and help text of `Refresh`.
+
+Radii, spacing, and the progress tint come from `UsageDesign`; the popup shares
+one visual scale with the window.
 
 Each row contains:
 

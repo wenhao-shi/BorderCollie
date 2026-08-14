@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Column-aligned usage rows: label, used percentage, reset countdown,
-/// with an optional progress bar spanning the row beneath each entry.
+/// Column-aligned usage rows: label, used percentage, reset time, with an
+/// optional progress bar spanning the row beneath each entry.
 ///
-/// Shared by the main window and the menu bar panel so the two surfaces cannot
-/// drift apart in wording or alignment.
+/// The compact layout, used by the menu-bar panel. The window uses a grouped
+/// `Form` instead, because a 360-point popover and a 940-point pane do not want
+/// the same layout. Wording stays shared via `UsageLimitDisplay`, which is where
+/// the two surfaces would otherwise drift apart.
 struct UsageLimitsGrid: View {
     let limits: [UsageLimitDisplay]
     var showsProgressBars: Bool = true
@@ -23,7 +25,7 @@ struct UsageLimitsGrid: View {
                         .foregroundStyle(limit.tier == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
                         .gridColumnAlignment(.trailing)
 
-                    Text(resetText(for: limit))
+                    Text(UsageLimitDisplay.resetLabel(for: limit))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -34,6 +36,7 @@ struct UsageLimitsGrid: View {
                     GridRow {
                         ProgressView(value: limit.usedPercentage, total: 100)
                             .controlSize(.small)
+                            .tint(limit.usedPercentage.quotaTint)
                             .gridCellColumns(3)
                             .padding(.bottom, 4)
                     }
@@ -41,14 +44,5 @@ struct UsageLimitsGrid: View {
             }
         }
         .font(font)
-    }
-
-    /// Absolute reset time rather than a countdown: it stays correct between
-    /// refreshes, where a countdown silently drifts.
-    private func resetText(for limit: UsageLimitDisplay) -> String {
-        guard let reset = limit.resetText() else {
-            return "--"
-        }
-        return "resets \(reset)"
     }
 }

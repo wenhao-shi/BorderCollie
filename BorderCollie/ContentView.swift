@@ -13,19 +13,28 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                Label("Usage", systemImage: "chart.xyaxis.line")
-                    .tag(SidebarSection.usage)
-                Label("Evaluations", systemImage: "stopwatch")
-                    .tag(SidebarSection.evaluations)
-                sidebarLabel("Codex", icon: .codex)
-                    .tag(SidebarSection.codex)
-                sidebarLabel("Cursor", icon: .cursor)
-                    .tag(SidebarSection.cursor)
-                sidebarLabel("Claude Code", icon: .claudeCode)
-                    .tag(SidebarSection.claudeCode)
+                // Two kinds of destination live here: screens over the imported
+                // history, and screens over live provider quota. They refresh on
+                // different clocks and hold different data, so they are labelled
+                // rather than run together in one flat list.
+                Section("History") {
+                    Label("Usage", systemImage: "chart.xyaxis.line")
+                        .tag(SidebarSection.usage)
+                    Label("Evaluations", systemImage: "stopwatch")
+                        .tag(SidebarSection.evaluations)
+                }
+
+                Section("Live quota") {
+                    sidebarLabel("Codex", icon: .codex)
+                        .tag(SidebarSection.codex)
+                    sidebarLabel("Cursor", icon: .cursor)
+                        .tag(SidebarSection.cursor)
+                    sidebarLabel("Claude Code", icon: .claudeCode)
+                        .tag(SidebarSection.claudeCode)
+                }
             }
             .listStyle(.sidebar)
-            .navigationTitle("BorderCollie")
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } detail: {
             switch selection ?? .usage {
             case .usage:
@@ -40,12 +49,16 @@ struct ContentView: View {
                 ClaudeUsageView()
             }
         }
+        .frame(minWidth: 940, minHeight: 620)
     }
 
+    /// `Label`'s icon slot rather than a hand-rolled `HStack`, so bundled agent
+    /// artwork lands in the same icon column as the SF Symbols above it.
     private func sidebarLabel(_ title: String, icon: AgentIcon) -> some View {
-        HStack(spacing: 8) {
-            AgentIconView(icon: icon, size: 16)
+        Label {
             Text(title)
+        } icon: {
+            AgentIconView(icon: icon, size: 16)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
