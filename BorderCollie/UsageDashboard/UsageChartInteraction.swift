@@ -9,6 +9,18 @@ struct UsageChartCurvePoint: Equatable, Identifiable {
 }
 
 enum UsageChartCurve {
+    /// Keep the tallest rendered sample below the top of the plot so a
+    /// selection callout has vertical room inside the chart.
+    static func yDomainMaximum(
+        curves: [UsageAgent: [UsageChartCurvePoint]]
+    ) -> Double {
+        let curveMaximum = curves.values
+            .flatMap { $0 }
+            .map(\.value)
+            .max() ?? 0
+        return max(1, curveMaximum * 1.25)
+    }
+
     static func samples(
         points: [UsageChartCurvePoint],
         subdivisions: Int = 16

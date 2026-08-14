@@ -537,6 +537,17 @@ struct UsageDashboardTests {
         #expect(samples[4...8].allSatisfy { (20...30).contains($0.value) })
     }
 
+    @Test func chartYDomainLeavesHeadroomAboveRenderedCurve() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let curves: [UsageAgent: [UsageChartCurvePoint]] = [
+            .codex: [UsageChartCurvePoint(date: start, value: 200)],
+            .claudeCode: [UsageChartCurvePoint(date: start, value: 80)],
+        ]
+
+        #expect(UsageChartCurve.yDomainMaximum(curves: curves) == 250)
+        #expect(UsageChartCurve.yDomainMaximum(curves: [:]) == 1)
+    }
+
     @Test func chartSelectionLandsOnASampleTheCurveActuallyDrew() throws {
         let start = Date(timeIntervalSince1970: 1_000)
         let curve = UsageChartCurve.samples(

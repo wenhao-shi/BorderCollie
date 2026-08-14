@@ -82,7 +82,7 @@ struct UsageDailyChart: View {
         .chartLegend(.hidden)
         .chartXSelection(value: $rawSelectedDate)
         .chartXScale(domain: aggregate.interval.start...chartEnd)
-        .chartYScale(domain: .automatic(includesZero: true))
+        .chartYScale(domain: 0...UsageChartCurve.yDomainMaximum(curves: curves))
         .chartXAxis {
             if range == .oneDay {
                 AxisMarks(values: .automatic(desiredCount: 5)) {
@@ -145,6 +145,15 @@ struct UsageDailyChart: View {
             RuleMark(x: .value("Selected time", snapshot.date))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 .foregroundStyle(.secondary.opacity(0.6))
+
+            // Anchor the callout to the selected curve rather than to the top
+            // of the full-height RuleMark. The padded y-domain then leaves
+            // actual plot space above it.
+            PointMark(
+                x: .value("Selected time", snapshot.date),
+                y: .value("Selected value", snapshot.peakValue)
+            )
+                .symbolSize(0)
                 .annotation(
                     position: .top,
                     spacing: UsageDesign.Spacing.small,
@@ -235,6 +244,7 @@ struct UsageDailyChart: View {
         let entries: [(agent: UsageAgent, value: Double)]
 
         var total: Double { entries.reduce(0) { $0 + $1.value } }
+        var peakValue: Double { entries.map(\.value).max() ?? 0 }
     }
 
     private var snapshot: Snapshot? {
