@@ -9,6 +9,8 @@ enum AgentIcon: String, Sendable {
     case codex
     case cursor
     case claudeCode
+    case openCode
+    case pi
 
     var resource: ImageResource {
         switch self {
@@ -18,6 +20,10 @@ enum AgentIcon: String, Sendable {
             .agentIconCursor
         case .claudeCode:
             .agentIconClaude
+        case .openCode:
+            .agentIconOpenCode
+        case .pi:
+            .agentIconPi
         }
     }
 }
