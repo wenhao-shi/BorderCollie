@@ -2,10 +2,7 @@ import Charts
 import SwiftUI
 
 struct UsageDailyChart: View {
-    /// Adjacent stacked bands are told apart by hue contrast across their shared
-    /// boundary, and lowering alpha flattens that contrast, so this sits at the
-    /// legible end of the intended 0.2–0.4 range.
-    private static let bandOpacity = 0.4
+    private static let lineWidth: CGFloat = 2.5
 
     let aggregate: UsageAggregate
     let range: UsageDateRange
@@ -33,6 +30,8 @@ struct UsageDailyChart: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .fixedSize()
+
+                legend
             }
 
             if visibleAgents.isEmpty {
@@ -61,20 +60,26 @@ struct UsageDailyChart: View {
         }
     }
 
-    /// Stacked, not overlaid. Four translucent areas sharing a zero baseline
-    /// produced up to five composite tints and an arbitrary reading order; the
-    /// series sum to a meaningful quantity, so the stack is the truthful form
-    /// and the top edge doubles as the period total.
+    /// Overlaid from a shared zero baseline, each series a solid line over a
+    /// faint wash.
+    ///
+    /// Two passes on purpose: every area first, then every line. Interleaving
+    /// them lets a later agent's fill cover an earlier agent's line, and the
+    /// line is the channel that identifies the series — the fill is atmosphere,
+    /// which is what makes overlapping safe here.
     private var chart: some View {
         Chart {
             ForEach(visibleAgents, id: \.self) { agent in
-                band(for: agent)
+                areaBand(for: agent)
+            }
+
+            ForEach(visibleAgents, id: \.self) { agent in
+                lineBand(for: agent)
             }
 
             selectionMark
         }
-        .chartForegroundStyleScale(UsageAgent.chartStyleScale)
-        .chartLegend(position: .bottom, alignment: .leading, spacing: UsageDesign.Spacing.medium)
+        .chartLegend(.hidden)
         .chartXSelection(value: $rawSelectedDate)
         .chartXScale(domain: aggregate.interval.start...chartEnd)
         .chartYScale(domain: .automatic(includesZero: true))
@@ -109,6 +114,22 @@ struct UsageDailyChart: View {
         .animation(.smooth(duration: 0.3), value: enabledAgents)
     }
 
+    /// Reads as a key, not as a control: filtering lives in the toolbar, so
+    /// these carry no press state and nothing here is clickable.
+    private var legend: some View {
+        HStack(spacing: UsageDesign.Spacing.medium) {
+            ForEach(visibleAgents, id: \.self) { agent in
+                HStack(spacing: UsageDesign.Spacing.tight + 2) {
+                    UsageAgentIconView(agent: agent, size: 13)
+                    Text(agent.displayName)
+                        .font(.caption)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Series: \(visibleAgents.map(\.displayName).joined(separator: ", "))")
+    }
+
     /// `AnnotationOverflowResolution` clamps the callout inside the plot area,
     /// which replaced hand-measured tooltip geometry against a fixed 160×68 box.
     @ChartContentBuilder
@@ -131,19 +152,32 @@ struct UsageDailyChart: View {
         }
     }
 
+    /// Explicit `yStart`/`yEnd` with a `series:` key, which is what keeps the
+    /// areas independent instead of letting Swift Charts stack them.
     @ChartContentBuilder
-    private func band(for agent: UsageAgent) -> some ChartContent {
+    private func areaBand(for agent: UsageAgent) -> some ChartContent {
         ForEach(curve(for: agent)) { point in
             AreaMark(
                 x: .value("Time", point.date),
-                y: .value(metric.label, point.value)
+                yStart: .value("Baseline", 0.0),
+                yEnd: .value(metric.label, point.value),
+                series: .value("Agent", agent.displayName)
             )
-            .foregroundStyle(by: .value("Agent", agent.displayName))
-            // Applied to the mark, not to the style scale, so the legend
-            // swatches keep full saturation. The bands are stacked and
-            // therefore disjoint, so this does not composite the way the old
-            // overlapping fills did.
-            .opacity(Self.bandOpacity)
+            .foregroundStyle(agent.chartFill)
+            .interpolationMethod(.linear)
+        }
+    }
+
+    @ChartContentBuilder
+    private func lineBand(for agent: UsageAgent) -> some ChartContent {
+        ForEach(curve(for: agent)) { point in
+            LineMark(
+                x: .value("Time", point.date),
+                y: .value(metric.label, point.value),
+                series: .value("Agent", agent.displayName)
+            )
+            .lineStyle(StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round, lineJoin: .round))
+            .foregroundStyle(agent.chartColor)
             .interpolationMethod(.linear)
             .accessibilityLabel(accessibilityLabel(for: agent, at: point.date))
             .accessibilityValue(axisLabel(point.value))

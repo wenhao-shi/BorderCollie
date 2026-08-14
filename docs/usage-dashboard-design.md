@@ -557,15 +557,25 @@ thing it changes. Do not add a fourth control altitude.
      use local-calendar day buckets for `7d` and `30d`.
    - Preserve partial first/current-hour buckets and fill missing chart buckets
      with zero without changing the calendar-day breakdown.
-   - **Stacked** `AreaMark` bands, one per enabled agent, at 0.2–0.4 opacity
-     applied to the mark rather than to the style scale, so legend swatches keep
-     full saturation. Do not draw overlapping areas from a shared zero baseline:
-     four translucent fills produce up to five composite tints and a reading
-     order set by draw order. The series sum to a meaningful quantity, so the
-     stack is the truthful form and its top edge doubles as the period total.
-   - Colours come from one `chartForegroundStyleScale`, ordered for contrast
-     between *adjacent* bands. No series may use `labelColor`: a series drawn in
-     the text colour reads as chrome.
+   - One solid `LineMark` per enabled agent in that agent's colour over a faint
+     `AreaMark` wash (`UsageAgent.chartFill`, a 0.32→0.05 vertical gradient),
+     both drawn from a shared zero baseline with explicit `yStart`/`yEnd` and a
+     `series:` key so Swift Charts does not stack them.
+   - Draw every area first, then every line, in two passes. Interleaving lets a
+     later agent's fill cover an earlier agent's line.
+   - The line is what identifies a series; the fill is atmosphere. That is the
+     whole reason overlapping fills are acceptable here, and it is the
+     constraint to preserve: do not lower line contrast or raise fill alpha to
+     the point where the fill becomes the primary channel, because overlapping
+     fills alone composite into tints that belong to no series and a reading
+     order set by draw order.
+   - Colours come from `UsageAgent.chartColor`, the single source for marks, the
+     legend, and callout dots. Codex uses `labelColor` (adaptive black/white) as
+     its brand identity, which is safe only under the line-carries-identity rule
+     above.
+   - The legend sits in the chart header beside the metric picker and is a key,
+     not a control — filtering is the toolbar's job, so legend entries have no
+     press state.
    - Every series must go through `UsageChartInteraction.densified(series:)`
      before smoothing. Swift Charts stacks by matching x values, so an agent idle
      in a bucket must carry a zero there rather than be absent.

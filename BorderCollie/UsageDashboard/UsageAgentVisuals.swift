@@ -3,34 +3,30 @@ import SwiftUI
 extension UsageAgent {
     static let dashboardOrder: [UsageAgent] = [.codex, .claudeCode, .openCode, .pi]
 
-    /// Hues chosen for separation between *adjacent* bands in the stacked
-    /// chart, which is where confusion actually happens: the stack is drawn in
-    /// `dashboardOrder`, so teal→orange→indigo→pink never puts two neighbouring
-    /// hues side by side.
+    /// Brand-representative, and the single source for every mark, legend chip,
+    /// and callout dot.
     ///
-    /// Codex was previously `labelColor`, which made its series render in the
-    /// text colour — the highest-contrast ink on screen, reading as chrome
-    /// rather than as one series among four.
+    /// Codex uses `labelColor` — adaptive black on light, white on dark, which
+    /// is OpenAI's identity and what the reference design uses. This colour is
+    /// only safe because the series is carried by a full-strength line: as a
+    /// large translucent area fill it reads as chrome rather than as data.
     var chartColor: Color {
         switch self {
-        case .codex: .teal
+        case .codex: Color(nsColor: .labelColor)
         case .claudeCode: .orange
         case .openCode: .indigo
         case .pi: .pink
         }
     }
-}
 
-extension UsageAgent {
-    /// One scale, declared once, applied to the chart. The legend and every
-    /// mark read their colour from here rather than each calling `chartColor`.
-    static var chartStyleScale: KeyValuePairs<String, Color> {
-        [
-            UsageAgent.codex.displayName: UsageAgent.codex.chartColor,
-            UsageAgent.claudeCode.displayName: UsageAgent.claudeCode.chartColor,
-            UsageAgent.openCode.displayName: UsageAgent.openCode.chartColor,
-            UsageAgent.pi.displayName: UsageAgent.pi.chartColor,
-        ]
+    /// The wash beneath the line. Faint enough that two overlapping fills stay
+    /// legible, since the line above it is what identifies the series.
+    var chartFill: LinearGradient {
+        LinearGradient(
+            colors: [chartColor.opacity(0.32), chartColor.opacity(0.05)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }
 

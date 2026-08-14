@@ -393,18 +393,25 @@ Read `docs/tracker_design.md` before adding another tracker.
 Read `docs/menubar-item-design.me` before changing the menu-bar companion UI or
 adding another tracker row there.
 
-### Decision: stack the daily chart instead of overlaying four areas
+### Decision: overlaid solid lines over faint fills, not stacked areas
 
-- Context: each agent drew an `AreaMark` from a zero baseline at 0.22 alpha, so
-  four active agents produced up to five composite tints and a reading order set
-  by draw order.
-- Alternatives considered: lines only with an area fill on the focused series.
-- Rationale: the series sum to a meaningful quantity (total cost, total tokens),
-  so the stack is the truthful form and its top edge doubles as the period
-  total. Selection moved to x-only as a consequence: in a stack, a point's
-  on-screen height is the running total, so 2D hit-testing would select by a
-  coordinate that no longer means what the reader thinks. The callout reports
-  every series at the selected x plus the total.
+- Context: the original chart overlaid four `AreaMark`s at 0.22 alpha from a
+  shared zero baseline, which composited into tints belonging to no series with
+  a reading order set by draw order. That was briefly fixed by stacking, then
+  replaced by this on a reference design.
+- Alternatives considered: stacked areas (shipped briefly — truthful, since the
+  series do sum to a meaningful quantity, but it buries per-series comparison
+  and forces every read through the running total).
+- Rationale: a full-strength `LineMark` per agent carries series identity, which
+  frees the fill to be atmosphere at 0.32→0.05. The overlap objection applies to
+  fills that are the *only* channel; it does not apply once a solid line sits on
+  top. **This is the invariant to preserve** — do not raise fill alpha or lower
+  line contrast to where the fill becomes primary.
+- Consequence: areas and lines are drawn in two separate passes so a later
+  agent's fill cannot cover an earlier agent's line.
+- Selection stays x-only even though screen y is meaningful again without
+  stacking: a callout reporting every series at the selected x is more useful
+  than one reporting whichever series the pointer landed nearest.
 
 ### Decision: the agent filter is a toolbar menu, not the chart legend
 
@@ -415,8 +422,8 @@ adding another tracker row there.
   `ControlGroup`.
 - Rationale: period and agents both scope the query, so they belong together in
   the toolbar; metric and grouping choose a view of the result and stay inline.
-  The chart regained a real, non-interactive legend via
-  `chartForegroundStyleScale`.
+  The chart keeps a plain, non-interactive legend in its header, beside the
+  metric picker.
 
 ### Decision: Evaluations keeps `HSplitView` rather than becoming a third column
 
