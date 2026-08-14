@@ -22,6 +22,8 @@ struct UsageDailyChart: View {
                 // Stays beside the chart: this picks a view of the loaded
                 // result, unlike the period and agent controls in the toolbar,
                 // which change what gets loaded.
+                legend
+
                 Picker("Chart metric", selection: $metric) {
                     ForEach(UsageChartMetric.allCases) { option in
                         Text(option.label).tag(option)
@@ -30,8 +32,6 @@ struct UsageDailyChart: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .fixedSize()
-
-                legend
             }
 
             if visibleAgents.isEmpty {
@@ -121,8 +121,11 @@ struct UsageDailyChart: View {
             ForEach(visibleAgents, id: \.self) { agent in
                 HStack(spacing: UsageDesign.Spacing.tight + 2) {
                     UsageAgentIconView(agent: agent, size: 13)
+                    // Same colour as the agent's line, so the key needs no
+                    // swatch of its own.
                     Text(agent.displayName)
                         .font(.caption)
+                        .foregroundStyle(agent.chartColor)
                 }
             }
         }

@@ -26,27 +26,25 @@
   row state, and compact provider summaries.
 - `BorderCollie/UsageQuotaQuery.swift`: shared timeout wrapper for quota
   queries.
-- `BorderCollie/UsageTrackerView.swift`: shared tracker UI, toolbar refresh,
-  auto-refresh loop, and preview-safe rendering.
+- `BorderCollie/LiveQuotaView.swift`: the single `Live quota` page, the
+  `LiveQuotaTracker` descriptors (service, limit mapping, cadence, copy), the
+  fan-out toolbar refresh, and one auto-refresh loop per tracker.
 - `BorderCollie/UsageTrackerViewModel.swift`: loading state, refresh lifecycle,
   timeout handling, and quota state.
 - `BorderCollie/UsageTrackingService.swift`: shared tracker service and HTTP
   client protocols.
-- `BorderCollie/CodexUsageView.swift`: Codex-specific tracker wrapper.
 - `BorderCollie/CodexQuotaService.swift`: coordinates credentials and quota
   client.
 - `BorderCollie/CodexCredentialResolver.swift`: Codex credential discovery and
   parsing.
 - `BorderCollie/CodexUsageClient.swift`: Codex quota HTTP client and response
   normalization.
-- `BorderCollie/CursorUsageView.swift`: Cursor-specific tracker wrapper.
 - `BorderCollie/CursorQuotaService.swift`: coordinates Cursor credentials and
   quota client.
 - `BorderCollie/CursorCredentialResolver.swift`: Cursor IDE auth-token
   discovery from Cursor's local `state.vscdb`.
 - `BorderCollie/CursorUsageClient.swift`: Cursor current-period usage client
   and response normalization.
-- `BorderCollie/ClaudeUsageView.swift`: Claude Code-specific tracker wrapper.
 - `BorderCollie/ClaudeQuotaService.swift`: coordinates Claude Code credentials
   and quota client.
 - `BorderCollie/ClaudeCredentialResolver.swift`: Claude Code OAuth credential
@@ -107,12 +105,17 @@ are prepared for the app UI to launch.
 
 ## Current Usage Tracker Standard
 
-- Query automatically when a tracker page opens.
+- Every tracked provider is a section on the one `Live quota` page, in order
+  Codex, Cursor, Claude Code. Do not give a tracker its own sidebar destination.
+- Each section keeps its own view model, cadence, and failure state; one
+  provider failing must never blank another.
+- Query automatically when the Live quota page opens.
 - Query automatically when the menu-bar usage popup opens.
 - Closing the main window keeps the gauge menu-bar item alive and hides the Dock icon.
 - Refresh automatically every 30 seconds by default; Claude Code uses
   a 60-second cadence plus a shared 429/cache gate.
-- Keep manual Refresh in the top toolbar.
+- Keep manual Refresh in the top toolbar, refreshing every tracker; a tracker in
+  a failure state also offers an inline Refresh beside its message.
 - Keep manual refresh in the menu-bar popup as an icon-only button.
 - Show usage consumed in percentages and progress bars.
 - The menu-bar popup shows all tracked agents in compact used format:
@@ -335,14 +338,19 @@ are prepared for the app UI to launch.
 - Rationale: `build-for-testing` catches compile errors without disrupting the
   desktop session.
 
-### Decision: extract a shared tracker view and view model
+### Decision: one `Live quota` page, one section per tracker
 
-- Context: Cursor is the second tracker and shares Codex's refresh, timeout,
-  toolbar, preview, and usage-card behavior.
-- Alternatives considered: duplicate the Codex view/model and rename files.
-- Rationale: shared `UsageTrackerView` and `UsageTrackerViewModel` keep tracker
-  behavior consistent while provider-specific credential and API details remain
-  isolated.
+- Context: each provider had its own sidebar destination, so comparing two
+  providers cost a navigation, and the shared `UsageTrackerView` carried the
+  per-provider copy as a dozen loose string parameters.
+- Alternatives considered: keeping the per-provider pages; a single view model
+  querying all three (which is what the menu bar's `MenuBarUsageViewModel`
+  does).
+- Rationale: quota is read by comparison, so the providers belong on one page.
+  Each section still owns a separate `UsageTrackerViewModel` and its own refresh
+  loop — one provider signed out or rate-limited must never blank another, and
+  Claude's 60-second cadence must not drag Codex and Cursor to it. Per-provider
+  copy moved onto `LiveQuotaTracker`/`UsageTrackerCopy` beside the descriptor.
 
 ### Decision: add a SwiftUI `MenuBarExtra` companion
 

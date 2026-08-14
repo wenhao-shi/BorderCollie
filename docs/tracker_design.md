@@ -28,19 +28,29 @@ changing or implementing that dashboard.
 
 ## Current Product Standard
 
-The current Codex screen defines the product standard for future trackers:
+The `Live quota` screen defines the product standard for future trackers:
 
-- The sidebar contains one tab per tracker.
-- The detail window header title is the tracker name, for example `Codex`.
-- Do not repeat the tracker name as a large heading in the detail body.
+- The sidebar contains a single `Live quota` destination, not one tab per
+  tracker. Every tracked provider is a section on that one page, in product
+  order: Codex, Cursor, Claude Code. Comparing two providers should not cost a
+  navigation.
+- Each section keeps its own view model, poll cadence, and failure state. One
+  provider being signed out or rate-limited must never blank another. Do not
+  merge them behind a single request or a single loading flag.
+- The detail window header title is `Live quota`; the section header carries the
+  tracker name and brand icon.
+- Do not repeat a tracker name as a large heading in the detail body.
 - Auth implementation details are not shown in any user-facing string, in the
   happy path or in an error. "Not signed in to Codex", never "No Codex OAuth
   credentials found".
 - Usage percentages and progress bars represent usage consumed.
-- The detail body is a grouped `Form` that fills its pane. The section header
-  carries the agent's brand icon and name; the footer carries extra-usage and
-  the updated timestamp. Do not lay the body out as a fixed-width card pinned to
-  the top-left corner — the pane is as wide as the Usage dashboard's.
+- The page is a grouped `Form` that fills its pane, one `Section` per tracker.
+  The section header carries the agent's brand icon and name; the footer carries
+  extra-usage and the updated timestamp. Do not lay a tracker out as a
+  fixed-width card pinned to the top-left corner — the pane is as wide as the
+  Usage dashboard's.
+- The toolbar Refresh refreshes every tracker. A tracker in a failure state also
+  offers its own Refresh inline, where its message is.
 - Each usage window is shown as:
   - A human label, such as `5h` or `7d`.
   - Used percentage, not remaining percentage.
@@ -82,16 +92,13 @@ The menu-bar companion follows the same usage semantics in a compact format:
 - Detailed menu-bar UI and row-state rules live in
   `docs/menubar-item-design.me`.
 
-The current Codex UI is implemented primarily in:
+The live-quota UI is implemented in:
 
-- `BorderCollie/ContentView.swift`
-- `BorderCollie/CodexUsageView.swift`
-- `BorderCollie/CodexUsageDisplay.swift`
-
-Claude Code follows the same UI pattern via:
-
-- `BorderCollie/ClaudeUsageView.swift`
-- `BorderCollie/ClaudeUsageDisplay.swift`
+- `BorderCollie/ContentView.swift` — sidebar destination.
+- `BorderCollie/LiveQuotaView.swift` — the page, the `LiveQuotaTracker`
+  descriptors, and each tracker's `UsageTrackerCopy`.
+- `BorderCollie/CodexUsageDisplay.swift`, `CursorUsageDisplay.swift`,
+  `ClaudeUsageDisplay.swift` — per-provider row labels and limit mapping.
 
 ## Architecture Overview
 
@@ -99,11 +106,15 @@ The current tracker implementation has six layers:
 
 1. **Root navigation**
    - `ContentView` owns sidebar selection.
-   - Each tracker should be a stable sidebar destination.
+   - `Live quota` is one stable sidebar destination for every tracker.
 
 2. **Tracker view**
-   - `UsageTrackerView` owns layout, toolbar refresh, preview safety, and the
-     fixed 30-second refresh loop.
+   - `LiveQuotaView` owns page layout, the toolbar refresh that fans out to
+     every tracker, preview safety, and one refresh loop per tracker at that
+     tracker's cadence.
+   - `LiveQuotaTracker` carries a provider's identity, service, limit mapping,
+     cadence, and copy. Adding a tracker means adding a descriptor and a section,
+     not a new page.
    - The view does not parse provider responses and does not read credentials.
 
 3. **View model**
@@ -300,12 +311,15 @@ The compact menu-bar labels are `Auto` and `API`.
 
 Refresh behavior is split between the view and view model:
 
-- `CodexUsageView` starts refresh automatically on page open.
-- `CodexUsageView` repeats refresh every 30 seconds.
-- `CodexUsageView` disables auto refresh in Xcode previews.
+- `LiveQuotaView` starts every tracker's refresh automatically on page open.
+- `LiveQuotaView` runs one loop per tracker at that tracker's own cadence —
+  30 seconds for Codex and Cursor, 60 for Claude Code — so a slow provider
+  cannot delay its neighbours' polls.
+- `LiveQuotaView` disables auto refresh in Xcode previews.
 - `UsageTrackerViewModel` ignores refresh requests while `isLoading` is true.
 - `UsageTrackerViewModel` times out the full refresh operation after 20 seconds.
-- The toolbar refresh button remains available for manual recovery.
+- The toolbar refresh button refreshes every tracker and remains available for
+  manual recovery; a failing tracker also offers an inline Refresh.
 - `MenuBarUsageViewModel` refreshes all tracked agents concurrently, ignores
   overlapping refresh requests, and keeps previous row data visible while a
   refresh is in flight.
@@ -535,12 +549,12 @@ struct UsageTrackerDescriptor: Identifiable, Sendable {
 }
 ```
 
-Recommended shared view:
+Shared page:
 
-- `UsageTrackerView`
-  - Receives a tracker title and view model.
-  - Renders the current usage card.
-  - Owns toolbar refresh and 30-second auto refresh.
+- `LiveQuotaView`
+  - Renders one `Section` per `LiveQuotaTracker`, each backed by its own
+    `UsageTrackerViewModel`.
+  - Owns the fan-out toolbar refresh and one auto-refresh loop per tracker.
 
 Recommended shared view model:
 
@@ -587,16 +601,19 @@ needs a different user experience.
    - Add window labels.
    - Reset formatting is shared and distance-based; a new tracker should not
      need its own rules.
-   - Keep the card layout consistent.
+   - Keep the row layout consistent.
 
-6. **Wire navigation**
-   - Add a sidebar item.
-   - Add a detail route.
-   - Keep one stable selection enum case per tracker.
+6. **Wire it into the page**
+   - Add a `LiveQuotaTracker` static with the provider's service, limit mapping,
+     poll cadence, and `UsageTrackerCopy`.
+   - Add it to `LiveQuotaTracker.all`, a `@StateObject` view model, a section,
+     and an auto-refresh `.task` in `LiveQuotaView`.
+   - Do not add a sidebar item or a detail route. Trackers are sections on one
+     page.
    - Add a compact menu-bar descriptor and formatter.
 
 7. **Add previews**
-   - Add a filled preview with representative quota data.
+   - Add representative quota data to the `LiveQuotaView` preview.
    - Disable auto refresh in previews.
 
 8. **Add tests**

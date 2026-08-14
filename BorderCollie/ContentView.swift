@@ -12,26 +12,16 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
+            // Flat: with the three provider pages merged into one Live quota
+            // destination there are three items total, and section headers over
+            // a single row are noise.
             List(selection: $selection) {
-                // Two kinds of destination live here: screens over the imported
-                // history, and screens over live provider quota. They refresh on
-                // different clocks and hold different data, so they are labelled
-                // rather than run together in one flat list.
-                Section("History") {
-                    Label("Usage", systemImage: "chart.xyaxis.line")
-                        .tag(SidebarSection.usage)
-                    Label("Evaluations", systemImage: "stopwatch")
-                        .tag(SidebarSection.evaluations)
-                }
-
-                Section("Live quota") {
-                    sidebarLabel("Codex", icon: .codex)
-                        .tag(SidebarSection.codex)
-                    sidebarLabel("Cursor", icon: .cursor)
-                        .tag(SidebarSection.cursor)
-                    sidebarLabel("Claude Code", icon: .claudeCode)
-                        .tag(SidebarSection.claudeCode)
-                }
+                Label("Usage", systemImage: "chart.xyaxis.line")
+                    .tag(SidebarSection.usage)
+                Label("Evaluations", systemImage: "stopwatch")
+                    .tag(SidebarSection.evaluations)
+                Label("Live quota", systemImage: "gauge.with.dots.needle.bottom.50percent")
+                    .tag(SidebarSection.liveQuota)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
@@ -41,36 +31,18 @@ struct ContentView: View {
                 UsageDashboardView()
             case .evaluations:
                 EvaluationRunsView()
-            case .codex:
-                CodexUsageView()
-            case .cursor:
-                CursorUsageView()
-            case .claudeCode:
-                ClaudeUsageView()
+            case .liveQuota:
+                LiveQuotaView()
             }
         }
         .frame(minWidth: 940, minHeight: 620)
-    }
-
-    /// `Label`'s icon slot rather than a hand-rolled `HStack`, so bundled agent
-    /// artwork lands in the same icon column as the SF Symbols above it.
-    private func sidebarLabel(_ title: String, icon: AgentIcon) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            AgentIconView(icon: icon, size: 16)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
     }
 }
 
 private enum SidebarSection: String, Identifiable {
     case usage
     case evaluations
-    case codex
-    case cursor
-    case claudeCode
+    case liveQuota
 
     var id: String { rawValue }
 }
