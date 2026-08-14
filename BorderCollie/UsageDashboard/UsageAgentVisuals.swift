@@ -30,28 +30,47 @@ extension UsageAgent {
     }
 }
 
+extension UsageAgent {
+    var icon: AgentIcon {
+        switch self {
+        case .claudeCode: .claudeCode
+        case .codex: .codex
+        case .openCode: .openCode
+        case .pi: .pi
+        }
+    }
+
+    /// Whether the asset needs a colour applied.
+    ///
+    /// Claude's artwork is authored full-colour. Codex is a template whose
+    /// ambient label colour already *is* its `chartColor`. Only OpenCode and Pi
+    /// are templates wanting a colour that differs from the ambient one.
+    var iconNeedsTint: Bool {
+        switch self {
+        case .claudeCode, .codex: false
+        case .openCode, .pi: true
+        }
+    }
+}
+
 /// Brand artwork for every agent.
-///
-/// OpenCode and Pi ship as template silhouettes (`fill="currentColor"`), so they
-/// take `chartColor` and match their series. Codex is also a template and picks
-/// up the ambient label colour, which is its `chartColor`. Claude's asset is
-/// full-colour and renders as authored.
 struct UsageAgentIconView: View {
     let agent: UsageAgent
     var size: CGFloat = 16
+    /// Set `false` inside a `Menu`.
+    ///
+    /// Menu rows bridge to `NSMenuItem.image`, and an icon carrying a
+    /// `foregroundStyle` does not survive that extraction — the row renders with
+    /// no image at all rather than an untinted one. Monochrome template images
+    /// taking the menu's own tint is also the native idiom for menu items.
+    var isTinted = true
 
     var body: some View {
-        switch agent {
-        case .claudeCode:
-            AgentIconView(icon: .claudeCode, size: size)
-        case .codex:
-            AgentIconView(icon: .codex, size: size)
-        case .openCode:
-            AgentIconView(icon: .openCode, size: size)
+        if isTinted, agent.iconNeedsTint {
+            AgentIconView(icon: agent.icon, size: size)
                 .foregroundStyle(agent.chartColor)
-        case .pi:
-            AgentIconView(icon: .pi, size: size)
-                .foregroundStyle(agent.chartColor)
+        } else {
+            AgentIconView(icon: agent.icon, size: size)
         }
     }
 }

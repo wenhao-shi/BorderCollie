@@ -141,7 +141,7 @@ struct UsageDashboardView: View {
                     Label {
                         Text(agent.displayName)
                     } icon: {
-                        UsageAgentIconView(agent: agent, size: 14)
+                        UsageAgentIconView(agent: agent, size: 14, isTinted: false)
                     }
                 }
             }
