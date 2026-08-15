@@ -293,14 +293,36 @@ struct UsageDashboardTests {
             cacheRead: 30, output: 40, reasoning: 10, write5m: 10, write1h: 10
         )
         let engine = UsagePricingEngine()
-        #expect(engine.price(claude) == .priced(costNanodollars: 671_000, ruleID: "anthropic-sonnet-5-intro"))
+        #expect(engine.price(claude) == .priced(costNanodollars: 671_000, ruleID: "anthropic-sonnet-5-standard"))
 
         claude = try makeEvent(
             agent: .claudeCode, authority: .anthropic, model: "claude-sonnet-5",
             occurredAt: "2026-09-01T00:00:00Z", input: 100, cacheWrite: 0,
             cacheRead: 0, output: 100
         )
-        #expect(engine.price(claude) == .priced(costNanodollars: 1_800_000, ruleID: "anthropic-sonnet-5-standard"))
+        #expect(engine.price(claude) == .priced(costNanodollars: 1_200_000, ruleID: "anthropic-sonnet-5-standard"))
+
+        let terraLaunch = try makeEvent(
+            model: "gpt-5.6-terra", occurredAt: "2026-07-29T23:59:59Z",
+            input: 100, cacheWrite: 20, cacheRead: 30, output: 40
+        )
+        #expect(engine.price(terraLaunch) == .priced(costNanodollars: 920_000, ruleID: "openai-gpt-5.6-terra-launch"))
+        let terraReduced = try makeEvent(
+            model: "gpt-5.6-terra", occurredAt: "2026-07-30T00:00:00Z",
+            input: 100, cacheWrite: 20, cacheRead: 30, output: 40
+        )
+        #expect(engine.price(terraReduced) == .priced(costNanodollars: 736_000, ruleID: "openai-gpt-5.6-terra"))
+
+        let lunaLaunch = try makeEvent(
+            model: "gpt-5.6-luna", occurredAt: "2026-07-29T23:59:59Z",
+            input: 100, cacheWrite: 20, cacheRead: 30, output: 40
+        )
+        #expect(engine.price(lunaLaunch) == .priced(costNanodollars: 368_000, ruleID: "openai-gpt-5.6-luna-launch"))
+        let lunaReduced = try makeEvent(
+            model: "gpt-5.6-luna", occurredAt: "2026-07-30T00:00:00Z",
+            input: 100, cacheWrite: 20, cacheRead: 30, output: 40
+        )
+        #expect(engine.price(lunaReduced) == .priced(costNanodollars: 73_600, ruleID: "openai-gpt-5.6-luna"))
 
         let long = try makeEvent(input: 273_000, cacheWrite: 0, cacheRead: 0, output: 1_000)
         #expect(engine.price(long) == .priced(costNanodollars: 2_775_000_000, ruleID: "openai-gpt-5.6-sol"))

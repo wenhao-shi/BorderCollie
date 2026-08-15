@@ -56,18 +56,19 @@ enum UsageModelCatalog {
 }
 
 enum UsagePricingCatalog {
-    static let retrievedAtMilliseconds = iso("2026-08-12T00:00:00Z")
+    static let retrievedAtMilliseconds = iso("2026-08-15T00:00:00Z")
     static let anthropicSource = "https://platform.claude.com/docs/en/about-claude/pricing"
 
     static let rules: [UsagePricingRule] = [
         anthropic("anthropic-fable-5-2026", "claude-fable-5", from: "2026-06-09T00:00:00Z", input: 10_000, write5m: 12_500, write1h: 20_000, read: 1_000, output: 50_000),
         anthropic("anthropic-opus-5-2026", "claude-opus-5", from: "2026-07-24T00:00:00Z", input: 5_000, write5m: 6_250, write1h: 10_000, read: 500, output: 25_000),
-        anthropic("anthropic-sonnet-5-intro", "claude-sonnet-5", from: "2026-06-30T00:00:00Z", until: "2026-09-01T00:00:00Z", input: 2_000, write5m: 2_500, write1h: 4_000, read: 200, output: 10_000),
-        anthropic("anthropic-sonnet-5-standard", "claude-sonnet-5", from: "2026-09-01T00:00:00Z", input: 3_000, write5m: 3_750, write1h: 6_000, read: 300, output: 15_000),
+        anthropic("anthropic-sonnet-5-standard", "claude-sonnet-5", from: "2026-06-30T00:00:00Z", input: 2_000, write5m: 2_500, write1h: 4_000, read: 200, output: 10_000),
         anthropic("anthropic-haiku-4.5", "claude-haiku-4.5", from: "2025-10-15T00:00:00Z", input: 1_000, write5m: 1_250, write1h: 2_000, read: 100, output: 5_000),
         openAI("openai-gpt-5.6-sol", "gpt-5.6-sol", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol", input: 5_000, write: 6_250, read: 500, output: 30_000),
-        openAI("openai-gpt-5.6-terra", "gpt-5.6-terra", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-terra", input: 2_500, write: 3_125, read: 250, output: 15_000),
-        openAI("openai-gpt-5.6-luna", "gpt-5.6-luna", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-luna", input: 1_000, write: 1_250, read: 100, output: 6_000),
+        openAI("openai-gpt-5.6-terra-launch", "gpt-5.6-terra", from: "2026-07-09T00:00:00Z", until: "2026-07-30T00:00:00Z", source: "https://openai.com/index/gpt-5-6/", input: 2_500, write: 3_125, read: 250, output: 15_000),
+        openAI("openai-gpt-5.6-terra", "gpt-5.6-terra", from: "2026-07-30T00:00:00Z", source: "https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/", input: 2_000, write: 2_500, read: 200, output: 12_000),
+        openAI("openai-gpt-5.6-luna-launch", "gpt-5.6-luna", from: "2026-07-09T00:00:00Z", until: "2026-07-30T00:00:00Z", source: "https://openai.com/index/gpt-5-6/", input: 1_000, write: 1_250, read: 100, output: 6_000),
+        openAI("openai-gpt-5.6-luna", "gpt-5.6-luna", from: "2026-07-30T00:00:00Z", source: "https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/", input: 200, write: 250, read: 20, output: 1_200),
         openAI("openai-gpt-5.5", "gpt-5.5", from: "2026-04-24T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.5", input: 5_000, write: nil, read: 500, output: 30_000),
     ]
 
@@ -99,6 +100,7 @@ enum UsagePricingCatalog {
         _ id: String,
         _ model: String,
         from: String,
+        until: String? = nil,
         source: String,
         input: Int64,
         write: Int64?,
@@ -107,7 +109,7 @@ enum UsagePricingCatalog {
     ) -> UsagePricingRule {
         UsagePricingRule(
             id: id, authority: .openAI, canonicalModelID: model,
-            effectiveFromMilliseconds: iso(from), effectiveUntilMilliseconds: nil,
+            effectiveFromMilliseconds: iso(from), effectiveUntilMilliseconds: until.map { iso($0) },
             inputRateNanodollarsPerToken: input, cacheWriteRateNanodollarsPerToken: write,
             cacheWrite5mRateNanodollarsPerToken: nil, cacheWrite1hRateNanodollarsPerToken: nil,
             cacheReadRateNanodollarsPerToken: read, outputRateNanodollarsPerToken: output,
