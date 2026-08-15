@@ -9,7 +9,7 @@ enum UsageAnalyticsStoreError: Error, Equatable {
 }
 
 actor UsageAnalyticsStore {
-    static let schemaVersion = 3
+    static let schemaVersion = 4
 
     private let database: OpaquePointer
 
@@ -84,6 +84,8 @@ actor UsageAnalyticsStore {
     func apply(_ batch: UsageImportBatch) throws {
         guard batch.events.allSatisfy({ $0.agent == batch.agent }),
               batch.activeTurns.allSatisfy({ $0.agent == batch.agent }),
+              batch.activities.allSatisfy({ $0.agent == batch.agent }),
+              batch.trajectoryCapabilities.allSatisfy({ $0.agent == batch.agent }),
               batch.checkpoints.allSatisfy({ $0.agent == batch.agent })
         else { throw UsageAnalyticsStoreError.batchAgentMismatch }
 
@@ -91,10 +93,14 @@ actor UsageAnalyticsStore {
             for sourceKey in batch.resetSourceKeys.union(batch.removedSourceKeys) {
                 try deleteEvents(agent: batch.agent, sourceKey: sourceKey)
                 try deleteActiveTurns(agent: batch.agent, sourceKey: sourceKey)
+                try deleteTrajectoryActivities(agent: batch.agent, sourceKey: sourceKey)
+                try deleteTrajectoryCapabilities(agent: batch.agent, sourceKey: sourceKey)
                 try deleteCheckpoint(agent: batch.agent, sourceKey: sourceKey)
             }
             for event in batch.events { try upsert(event) }
             for turn in batch.activeTurns { try upsert(turn) }
+            for activity in batch.activities { try upsert(activity) }
+            for capability in batch.trajectoryCapabilities { try upsert(capability) }
             for checkpoint in batch.checkpoints { try upsert(checkpoint) }
         }
     }
@@ -291,6 +297,267 @@ actor UsageAnalyticsStore {
         return turns
     }
 
+    func trajectoryActivities(
+        sessionKey: String? = nil,
+        agents: Set<UsageAgent>? = nil
+    ) throws -> [TrajectoryActivity] {
+        var clauses: [String] = []
+        if sessionKey != nil { clauses.append("session_key = ?") }
+        if let agents, agents.isEmpty { return [] }
+        if let agents, !agents.isEmpty {
+            clauses.append("agent IN (\(Array(repeating: "?", count: agents.count).joined(separator: ",")))")
+        }
+        let sql = Self.trajectoryActivitySelect
+            + (clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND "))
+            + " ORDER BY session_key, source_order, started_at_ms, id"
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+        var index: Int32 = 1
+        if let sessionKey { bind(sessionKey, to: index, in: statement); index += 1 }
+        if let agents, !agents.isEmpty {
+            for agent in agents.sorted(by: { $0.rawValue < $1.rawValue }) {
+                bind(agent.rawValue, to: index, in: statement)
+                index += 1
+            }
+        }
+        var activities: [TrajectoryActivity] = []
+        while try step(statement) { activities.append(try decodeTrajectoryActivity(statement)) }
+        return activities
+    }
+
+    func trajectoryCapabilities(sessionKey: String? = nil) throws -> [TrajectoryCapability] {
+        let statement = try prepare("""
+        SELECT agent, session_key, source_key, family, availability, timing_quality,
+               source_schema_version, importer_version
+        FROM trajectory_capability
+        \(sessionKey == nil ? "" : "WHERE session_key = ?1")
+        ORDER BY session_key, family
+        """)
+        defer { sqlite3_finalize(statement) }
+        if let sessionKey { bind(sessionKey, to: 1, in: statement) }
+        var capabilities: [TrajectoryCapability] = []
+        while try step(statement) { capabilities.append(try decodeTrajectoryCapability(statement)) }
+        return capabilities
+    }
+
+    func trajectorySessions(
+        period: TrajectoryPeriod,
+        agents: Set<UsageAgent>,
+        before cursor: TrajectorySessionCursor?,
+        limit: Int,
+        endingAt date: Date,
+        calendar: Calendar
+    ) throws -> TrajectorySessionPage {
+        guard (1...200).contains(limit) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory.limit", value: String(limit))
+        }
+        guard !agents.isEmpty else { return TrajectorySessionPage(sessions: [], nextCursor: nil) }
+        let interval = period.interval(endingAt: date, calendar: calendar)
+        let sortedAgents = agents.sorted { $0.rawValue < $1.rawValue }
+        let agentPlaceholders = Array(repeating: "?", count: sortedAgents.count).joined(separator: ",")
+        var summaryClauses: [String] = []
+        if interval != nil {
+            summaryClauses.append("started_at_ms < ? AND ended_at_ms >= ?")
+        }
+        if cursor != nil {
+            summaryClauses.append("(started_at_ms < ? OR (started_at_ms = ? AND session_key < ?))")
+        }
+        let summaryWhere = summaryClauses.isEmpty ? "" : "WHERE " + summaryClauses.joined(separator: " AND ")
+        let statement = try prepare("""
+        WITH trajectory_records AS (
+            SELECT session_key, agent,
+                   occurred_at_ms AS started_at_ms, occurred_at_ms AS ended_at_ms,
+                   0 AS turn_count, 0 AS activity_count, 1 AS event_count
+            FROM usage_event
+            WHERE session_key IS NOT NULL AND agent IN (\(agentPlaceholders))
+            UNION ALL
+            SELECT session_key, agent, started_at_ms, ended_at_ms,
+                   1 AS turn_count, 0 AS activity_count, 0 AS event_count
+            FROM usage_active_turn
+            WHERE agent IN (\(agentPlaceholders))
+            UNION ALL
+            SELECT session_key, agent, started_at_ms, COALESCE(ended_at_ms, started_at_ms),
+                   0 AS turn_count, 1 AS activity_count, 0 AS event_count
+            FROM trajectory_activity
+            WHERE agent IN (\(agentPlaceholders))
+        ), trajectory_sessions AS (
+            SELECT session_key, agent,
+                   MIN(started_at_ms) AS started_at_ms,
+                   MAX(ended_at_ms) AS ended_at_ms,
+                   SUM(turn_count) AS turn_count,
+                   SUM(activity_count) AS activity_count,
+                   SUM(event_count) AS event_count
+            FROM trajectory_records
+            GROUP BY agent, session_key
+        )
+        SELECT session_key, agent, started_at_ms, ended_at_ms,
+               turn_count, activity_count, event_count
+        FROM trajectory_sessions
+        \(summaryWhere)
+        ORDER BY started_at_ms DESC, session_key DESC
+        LIMIT ?
+        """)
+        defer { sqlite3_finalize(statement) }
+
+        var bindIndex: Int32 = 1
+        for _ in 0..<3 {
+            for agent in sortedAgents {
+                bind(agent.rawValue, to: bindIndex, in: statement)
+                bindIndex += 1
+            }
+        }
+        if let interval {
+            bind(UsageEpoch.milliseconds(interval.end), to: bindIndex, in: statement)
+            bindIndex += 1
+            bind(UsageEpoch.milliseconds(interval.start), to: bindIndex, in: statement)
+            bindIndex += 1
+        }
+        if let cursor {
+            bind(cursor.startedAtMilliseconds, to: bindIndex, in: statement)
+            bindIndex += 1
+            bind(cursor.startedAtMilliseconds, to: bindIndex, in: statement)
+            bindIndex += 1
+            bind(cursor.sessionKey, to: bindIndex, in: statement)
+            bindIndex += 1
+        }
+        bind(Int64(limit + 1), to: bindIndex, in: statement)
+
+        var summaries: [TrajectorySessionSummary] = []
+        while try step(statement) {
+            let rawAgent = text(statement, 1)
+            guard let agent = UsageAgent(rawValue: rawAgent) else {
+                throw UsageAnalyticsStoreError.invalidStoredValue(
+                    column: "trajectory.session.agent",
+                    value: rawAgent
+                )
+            }
+            summaries.append(TrajectorySessionSummary(
+                sessionKey: text(statement, 0),
+                agent: agent,
+                startedAtMilliseconds: sqlite3_column_int64(statement, 2),
+                endedAtMilliseconds: sqlite3_column_int64(statement, 3),
+                turnCount: Int(sqlite3_column_int64(statement, 4)),
+                activityCount: Int(sqlite3_column_int64(statement, 5)),
+                usageEventCount: Int(sqlite3_column_int64(statement, 6)),
+                modelIDs: []
+            ))
+        }
+
+        let hasMore = summaries.count > limit
+        if hasMore { summaries.removeLast() }
+        let modelsBySession = try trajectoryModelIDs(sessionKeys: summaries.map(\.sessionKey))
+        summaries = summaries.map { summary in
+            TrajectorySessionSummary(
+                sessionKey: summary.sessionKey,
+                agent: summary.agent,
+                startedAtMilliseconds: summary.startedAtMilliseconds,
+                endedAtMilliseconds: summary.endedAtMilliseconds,
+                turnCount: summary.turnCount,
+                activityCount: summary.activityCount,
+                usageEventCount: summary.usageEventCount,
+                modelIDs: modelsBySession[summary.sessionKey, default: []]
+            )
+        }
+        let nextCursor = hasMore ? summaries.last.map {
+            TrajectorySessionCursor(
+                startedAtMilliseconds: $0.startedAtMilliseconds,
+                sessionKey: $0.sessionKey
+            )
+        } : nil
+        return TrajectorySessionPage(sessions: summaries, nextCursor: nextCursor)
+    }
+
+    private func trajectoryModelIDs(sessionKeys: [String]) throws -> [String: [String]] {
+        guard !sessionKeys.isEmpty else { return [:] }
+        let placeholders = Array(repeating: "?", count: sessionKeys.count).joined(separator: ",")
+        let statement = try prepare("""
+        SELECT session_key, model_id
+        FROM (
+            SELECT session_key, COALESCE(canonical_model_id, raw_model_id) AS model_id
+            FROM usage_event
+            WHERE session_key IN (\(placeholders))
+            UNION
+            SELECT session_key, COALESCE(canonical_model_id, raw_model_id) AS model_id
+            FROM usage_active_turn
+            WHERE session_key IN (\(placeholders))
+            UNION
+            SELECT session_key, raw_model_id AS model_id
+            FROM trajectory_activity
+            WHERE session_key IN (\(placeholders))
+        )
+        WHERE model_id IS NOT NULL
+        GROUP BY session_key, model_id
+        ORDER BY session_key, model_id
+        """)
+        defer { sqlite3_finalize(statement) }
+        var bindIndex: Int32 = 1
+        for _ in 0..<3 {
+            for sessionKey in sessionKeys {
+                bind(sessionKey, to: bindIndex, in: statement)
+                bindIndex += 1
+            }
+        }
+        var modelsBySession: [String: [String]] = [:]
+        while try step(statement) {
+            modelsBySession[text(statement, 0), default: []].append(text(statement, 1))
+        }
+        return modelsBySession
+    }
+
+    func trajectoryReport(sessionKey: String) throws -> TrajectorySessionReport? {
+        let turns = try activeTurns(sessionKeys: [sessionKey])
+        let activities = try trajectoryActivities(sessionKey: sessionKey)
+        let allEvents = try events(sessionKeys: [sessionKey])
+        guard !turns.isEmpty || !activities.isEmpty || !allEvents.isEmpty else { return nil }
+
+        let capabilityRows = try trajectoryCapabilities(sessionKey: sessionKey)
+        let linkedIDs = Set(activities.compactMap(\.usageEventID))
+        let linkedEvents = allEvents.filter { linkedIDs.contains($0.id) }
+        let agent = turns.first?.agent ?? activities.first?.agent ?? allEvents.first?.agent ?? .pi
+        var started = Int64.max
+        var ended = Int64.min
+        var turnCount = 0
+        var activityCount = 0
+        var eventCount = 0
+        var models: Set<String> = []
+        for turn in turns {
+            started = min(started, turn.startedAtMilliseconds)
+            ended = max(ended, turn.endedAtMilliseconds)
+            turnCount += 1
+            models.insert(turn.canonicalModelID ?? turn.rawModelID)
+        }
+        for activity in activities {
+            let activityEnd = activity.endedAtMilliseconds ?? activity.startedAtMilliseconds
+            started = min(started, activity.startedAtMilliseconds)
+            ended = max(ended, activityEnd)
+            activityCount += 1
+            if let model = activity.rawModelID { models.insert(model) }
+        }
+        for event in allEvents {
+            started = min(started, event.occurredAtMilliseconds)
+            ended = max(ended, event.occurredAtMilliseconds)
+            eventCount += 1
+            models.insert(event.canonicalModelID ?? event.rawModelID)
+        }
+        let summary = TrajectorySessionSummary(
+            sessionKey: sessionKey,
+            agent: agent,
+            startedAtMilliseconds: started,
+            endedAtMilliseconds: ended,
+            turnCount: turnCount,
+            activityCount: activityCount,
+            usageEventCount: eventCount,
+            modelIDs: models.sorted()
+        )
+        return TrajectorySessionReport(
+            summary: summary,
+            turns: turns,
+            activities: activities,
+            capabilities: capabilityRows,
+            linkedUsageEvents: linkedEvents
+        )
+    }
+
     func evaluationRuns() throws -> [EvaluationRun] {
         let statement = try prepare("""
         SELECT id, name, started_at_ms, ended_at_ms, created_at_ms
@@ -420,11 +687,21 @@ actor UsageAnalyticsStore {
     FROM usage_active_turn
     """
 
+    private static let trajectoryActivitySelect = """
+    SELECT id, agent, session_key, turn_id, parent_activity_id, kind, status,
+           source_order, order_quality, started_at_ms, ended_at_ms,
+           first_output_at_ms, start_quality, end_quality, first_output_quality,
+           raw_model_id, tool_name, attempt, failure_category, usage_event_id,
+           source_key, source_id, source_schema_version, importer_version
+    FROM trajectory_activity
+    """
+
     private static func migrate(_ database: OpaquePointer) throws {
         let version = Int(sqlite3_user_version(database))
         guard version <= schemaVersion else {
             throw UsageAnalyticsStoreError.sqlite("Database schema is newer than this app")
         }
+        var currentVersion = version
         if version == 0 {
             try execute(database, """
             CREATE TABLE IF NOT EXISTS usage_event (
@@ -510,6 +787,7 @@ actor UsageAnalyticsStore {
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_session_time ON usage_event(session_key, occurred_at_ms)")
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_completeness_time ON usage_event(completeness, occurred_at_ms)")
             try execute(database, "PRAGMA user_version = 3")
+            currentVersion = 3
         } else if version == 1 {
             try execute(database, "DROP TABLE IF EXISTS model_alias")
             try execute(database, """
@@ -525,12 +803,18 @@ actor UsageAnalyticsStore {
             """)
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_completeness_time ON usage_event(completeness, occurred_at_ms)")
             try execute(database, "PRAGMA user_version = 2")
+            currentVersion = 2
         }
-        if version == 1 || version == 2 {
+        if currentVersion == 1 || currentVersion == 2 {
             try execute(database, "ALTER TABLE usage_event ADD COLUMN session_key TEXT")
             try createEvaluationSchema(database)
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_session_time ON usage_event(session_key, occurred_at_ms)")
             try execute(database, "PRAGMA user_version = 3")
+            currentVersion = 3
+        }
+        if currentVersion == 3 {
+            try createTrajectorySchema(database)
+            try execute(database, "PRAGMA user_version = 4")
         }
     }
 
@@ -572,6 +856,56 @@ actor UsageAnalyticsStore {
         try execute(database, "CREATE INDEX IF NOT EXISTS usage_active_turn_session ON usage_active_turn(session_key, started_at_ms)")
         try execute(database, "CREATE INDEX IF NOT EXISTS usage_active_turn_source ON usage_active_turn(agent, source_key)")
         try execute(database, "CREATE UNIQUE INDEX IF NOT EXISTS evaluation_run_single_active ON evaluation_run((1)) WHERE ended_at_ms IS NULL")
+    }
+
+    private static func createTrajectorySchema(_ database: OpaquePointer) throws {
+        try execute(database, """
+        CREATE TABLE IF NOT EXISTS trajectory_activity (
+            id TEXT PRIMARY KEY,
+            agent TEXT NOT NULL,
+            session_key TEXT NOT NULL CHECK(length(session_key) > 0),
+            turn_id TEXT,
+            parent_activity_id TEXT,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_order INTEGER NOT NULL CHECK(source_order >= 0),
+            order_quality TEXT NOT NULL,
+            started_at_ms INTEGER NOT NULL,
+            ended_at_ms INTEGER CHECK(ended_at_ms IS NULL OR ended_at_ms >= started_at_ms),
+            first_output_at_ms INTEGER,
+            start_quality TEXT NOT NULL,
+            end_quality TEXT,
+            first_output_quality TEXT,
+            raw_model_id TEXT,
+            tool_name TEXT,
+            attempt INTEGER CHECK(attempt IS NULL OR attempt > 0),
+            failure_category TEXT,
+            usage_event_id TEXT,
+            source_key TEXT NOT NULL CHECK(length(source_key) > 0),
+            source_id TEXT NOT NULL,
+            source_schema_version TEXT NOT NULL,
+            importer_version INTEGER NOT NULL CHECK(importer_version > 0),
+            UNIQUE(agent, source_id)
+        )
+        """)
+        try execute(database, """
+        CREATE TABLE IF NOT EXISTS trajectory_capability (
+            agent TEXT NOT NULL,
+            session_key TEXT NOT NULL CHECK(length(session_key) > 0),
+            source_key TEXT NOT NULL CHECK(length(source_key) > 0),
+            family TEXT NOT NULL,
+            availability TEXT NOT NULL,
+            timing_quality TEXT,
+            source_schema_version TEXT NOT NULL,
+            importer_version INTEGER NOT NULL CHECK(importer_version > 0),
+            PRIMARY KEY(agent, session_key, family)
+        )
+        """)
+        try execute(database, "CREATE INDEX IF NOT EXISTS trajectory_activity_session_order ON trajectory_activity(session_key, source_order, started_at_ms)")
+        try execute(database, "CREATE INDEX IF NOT EXISTS trajectory_activity_session_time ON trajectory_activity(session_key, started_at_ms, ended_at_ms)")
+        try execute(database, "CREATE INDEX IF NOT EXISTS trajectory_activity_source ON trajectory_activity(agent, source_key)")
+        try execute(database, "CREATE INDEX IF NOT EXISTS trajectory_activity_parent ON trajectory_activity(parent_activity_id)")
+        try execute(database, "CREATE INDEX IF NOT EXISTS trajectory_capability_source ON trajectory_capability(agent, source_key)")
     }
 
     private func upsert(_ event: UsageEvent) throws {
@@ -641,6 +975,67 @@ actor UsageAnalyticsStore {
         try requireDone(statement)
     }
 
+    private func upsert(_ activity: TrajectoryActivity) throws {
+        let statement = try prepare("""
+        INSERT INTO trajectory_activity (
+            id, agent, session_key, turn_id, parent_activity_id, kind, status,
+            source_order, order_quality, started_at_ms, ended_at_ms,
+            first_output_at_ms, start_quality, end_quality, first_output_quality,
+            raw_model_id, tool_name, attempt, failure_category, usage_event_id,
+            source_key, source_id, source_schema_version, importer_version
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            agent=excluded.agent, session_key=excluded.session_key,
+            turn_id=excluded.turn_id, parent_activity_id=excluded.parent_activity_id,
+            kind=excluded.kind, status=excluded.status, source_order=excluded.source_order,
+            order_quality=excluded.order_quality, started_at_ms=excluded.started_at_ms,
+            ended_at_ms=excluded.ended_at_ms, first_output_at_ms=excluded.first_output_at_ms,
+            start_quality=excluded.start_quality, end_quality=excluded.end_quality,
+            first_output_quality=excluded.first_output_quality, raw_model_id=excluded.raw_model_id,
+            tool_name=excluded.tool_name, attempt=excluded.attempt,
+            failure_category=excluded.failure_category, usage_event_id=excluded.usage_event_id,
+            source_key=excluded.source_key, source_schema_version=excluded.source_schema_version,
+            importer_version=excluded.importer_version
+        """)
+        defer { sqlite3_finalize(statement) }
+        bind([
+            .text(activity.id), .text(activity.agent.rawValue), .text(activity.sessionKey),
+            .optionalText(activity.turnID), .optionalText(activity.parentActivityID),
+            .text(activity.kind.rawValue), .text(activity.status.rawValue),
+            .integer(activity.sourceOrder), .text(activity.orderQuality.rawValue),
+            .integer(activity.startedAtMilliseconds), .optionalInteger(activity.endedAtMilliseconds),
+            .optionalInteger(activity.firstOutputAtMilliseconds), .text(activity.startQuality.rawValue),
+            .optionalText(activity.endQuality?.rawValue), .optionalText(activity.firstOutputQuality?.rawValue),
+            .optionalText(activity.rawModelID), .optionalText(activity.toolName),
+            .optionalInteger(activity.attempt.map(Int64.init)), .optionalText(activity.failureCategory?.rawValue),
+            .optionalText(activity.usageEventID), .text(activity.sourceKey), .text(activity.sourceID),
+            .text(activity.sourceSchemaVersion), .integer(Int64(activity.importerVersion)),
+        ], in: statement)
+        try requireDone(statement)
+    }
+
+    private func upsert(_ capability: TrajectoryCapability) throws {
+        let statement = try prepare("""
+        INSERT INTO trajectory_capability (
+            agent, session_key, source_key, family, availability, timing_quality,
+            source_schema_version, importer_version
+        ) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(agent, session_key, family) DO UPDATE SET
+            source_key=excluded.source_key, availability=excluded.availability,
+            timing_quality=excluded.timing_quality,
+            source_schema_version=excluded.source_schema_version,
+            importer_version=excluded.importer_version
+        """)
+        defer { sqlite3_finalize(statement) }
+        bind([
+            .text(capability.agent.rawValue), .text(capability.sessionKey), .text(capability.sourceKey),
+            .text(capability.family.rawValue), .text(capability.availability.rawValue),
+            .optionalText(capability.timingQuality?.rawValue), .text(capability.sourceSchemaVersion),
+            .integer(Int64(capability.importerVersion)),
+        ], in: statement)
+        try requireDone(statement)
+    }
+
     private func upsert(_ checkpoint: UsageImportCheckpoint) throws {
         let statement = try prepare("""
         INSERT INTO import_checkpoint VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
@@ -696,6 +1091,20 @@ actor UsageAnalyticsStore {
 
     private func deleteActiveTurns(agent: UsageAgent, sourceKey: String) throws {
         let statement = try prepare("DELETE FROM usage_active_turn WHERE agent=?1 AND source_key=?2")
+        defer { sqlite3_finalize(statement) }
+        bind(agent.rawValue, to: 1, in: statement); bind(sourceKey, to: 2, in: statement)
+        try requireDone(statement)
+    }
+
+    private func deleteTrajectoryActivities(agent: UsageAgent, sourceKey: String) throws {
+        let statement = try prepare("DELETE FROM trajectory_activity WHERE agent=?1 AND source_key=?2")
+        defer { sqlite3_finalize(statement) }
+        bind(agent.rawValue, to: 1, in: statement); bind(sourceKey, to: 2, in: statement)
+        try requireDone(statement)
+    }
+
+    private func deleteTrajectoryCapabilities(agent: UsageAgent, sourceKey: String) throws {
+        let statement = try prepare("DELETE FROM trajectory_capability WHERE agent=?1 AND source_key=?2")
         defer { sqlite3_finalize(statement) }
         bind(agent.rawValue, to: 1, in: statement); bind(sourceKey, to: 2, in: statement)
         try requireDone(statement)
@@ -764,6 +1173,134 @@ actor UsageAnalyticsStore {
             sourceID: text(statement, 10),
             importerVersion: Int(sqlite3_column_int64(statement, 11))
         )
+    }
+
+    private func decodeTrajectoryActivity(_ statement: OpaquePointer) throws -> TrajectoryActivity {
+        let rawAgent = text(statement, 1)
+        let rawKind = text(statement, 5)
+        let rawStatus = text(statement, 6)
+        let rawOrderQuality = text(statement, 8)
+        let rawStartQuality = text(statement, 12)
+        guard let agent = UsageAgent(rawValue: rawAgent) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_activity.agent", value: rawAgent)
+        }
+        guard let kind = TrajectoryActivityKind(rawValue: rawKind) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_activity.kind", value: rawKind)
+        }
+        guard let status = TrajectoryActivityStatus(rawValue: rawStatus) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_activity.status", value: rawStatus)
+        }
+        guard let orderQuality = TrajectoryOrderQuality(rawValue: rawOrderQuality) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_activity.order_quality", value: rawOrderQuality)
+        }
+        guard let startQuality = TrajectoryBoundaryQuality(rawValue: rawStartQuality) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_activity.start_quality", value: rawStartQuality)
+        }
+        let endQuality = try decodeOptional(
+            TrajectoryBoundaryQuality.self,
+            statement: statement,
+            index: 13,
+            column: "trajectory_activity.end_quality"
+        )
+        let firstOutputQuality = try decodeOptional(
+            TrajectoryBoundaryQuality.self,
+            statement: statement,
+            index: 14,
+            column: "trajectory_activity.first_output_quality"
+        )
+        let failureCategory = try decodeOptional(
+            TrajectoryFailureCategory.self,
+            statement: statement,
+            index: 18,
+            column: "trajectory_activity.failure_category"
+        )
+        do {
+            return try TrajectoryActivity.normalized(
+                agent: agent,
+                sessionKey: text(statement, 2),
+                turnID: nullableText(statement, 3),
+                parentActivityID: nullableText(statement, 4),
+                kind: kind,
+                status: status,
+                sourceOrder: sqlite3_column_int64(statement, 7),
+                orderQuality: orderQuality,
+                startedAtMilliseconds: sqlite3_column_int64(statement, 9),
+                endedAtMilliseconds: nullableInt64(statement, 10),
+                firstOutputAtMilliseconds: nullableInt64(statement, 11),
+                startQuality: startQuality,
+                endQuality: endQuality,
+                firstOutputQuality: firstOutputQuality,
+                rawModelID: nullableText(statement, 15),
+                toolName: nullableText(statement, 16),
+                attempt: nullableInt64(statement, 17).map(Int.init),
+                failureCategory: failureCategory,
+                usageEventID: nullableText(statement, 19),
+                sourceKey: text(statement, 20),
+                sourceID: text(statement, 21),
+                sourceSchemaVersion: text(statement, 22),
+                importerVersion: Int(sqlite3_column_int64(statement, 23))
+            )
+        } catch {
+            throw UsageAnalyticsStoreError.invalidStoredValue(
+                column: "trajectory_activity",
+                value: String(describing: error)
+            )
+        }
+    }
+
+    private func decodeTrajectoryCapability(_ statement: OpaquePointer) throws -> TrajectoryCapability {
+        let rawAgent = text(statement, 0)
+        let rawFamily = text(statement, 3)
+        let rawAvailability = text(statement, 4)
+        guard let agent = UsageAgent(rawValue: rawAgent) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_capability.agent", value: rawAgent)
+        }
+        guard let family = TrajectoryCapabilityFamily(rawValue: rawFamily) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_capability.family", value: rawFamily)
+        }
+        guard let availability = TrajectoryCapabilityAvailability(rawValue: rawAvailability) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_capability.availability", value: rawAvailability)
+        }
+        let rawQuality = nullableText(statement, 5)
+        let timingQuality: TrajectoryBoundaryQuality?
+        if let rawQuality {
+            guard let quality = TrajectoryBoundaryQuality(rawValue: rawQuality) else {
+                throw UsageAnalyticsStoreError.invalidStoredValue(column: "trajectory_capability.timing_quality", value: rawQuality)
+            }
+            timingQuality = quality
+        } else {
+            timingQuality = nil
+        }
+        do {
+            return try TrajectoryCapability.normalized(
+                agent: agent,
+                sessionKey: text(statement, 1),
+                sourceKey: text(statement, 2),
+                family: family,
+                availability: availability,
+                timingQuality: timingQuality,
+                sourceSchemaVersion: text(statement, 6),
+                importerVersion: Int(sqlite3_column_int64(statement, 7))
+            )
+        } catch {
+            throw UsageAnalyticsStoreError.invalidStoredValue(
+                column: "trajectory_capability",
+                value: String(describing: error)
+            )
+        }
+    }
+
+    private func decodeOptional<T: RawRepresentable>(
+        _: T.Type,
+        statement: OpaquePointer,
+        index: Int32,
+        column: String
+    ) throws -> T? where T.RawValue == String {
+        guard let raw = nullableText(statement, index) else { return nil }
+        guard let value = T(rawValue: raw) else {
+            throw UsageAnalyticsStoreError.invalidStoredValue(column: column, value: raw)
+        }
+        return value
     }
 
     private func transaction(_ body: () throws -> Void) throws {

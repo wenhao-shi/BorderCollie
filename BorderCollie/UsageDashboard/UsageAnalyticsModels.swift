@@ -214,6 +214,8 @@ struct UsageImportBatch: Sendable {
     let agent: UsageAgent
     var events: [UsageEvent]
     var activeTurns: [UsageActiveTurn]
+    var activities: [TrajectoryActivity]
+    var trajectoryCapabilities: [TrajectoryCapability]
     var checkpoints: [UsageImportCheckpoint]
     var resetSourceKeys: Set<String>
     var removedSourceKeys: Set<String>
@@ -223,6 +225,8 @@ struct UsageImportBatch: Sendable {
         self.agent = agent
         events = []
         activeTurns = []
+        activities = []
+        trajectoryCapabilities = []
         checkpoints = []
         resetSourceKeys = []
         removedSourceKeys = []
@@ -234,6 +238,8 @@ struct UsageAgentImportReport: Equatable, Sendable {
     let agent: UsageAgent
     let importedEvents: Int
     let importedActiveTurns: Int
+    let importedActivities: Int
+    let importedTrajectoryCapabilities: Int
     let issues: [UsageImportIssue]
 }
 

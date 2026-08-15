@@ -1,8 +1,14 @@
 # Historical Usage Dashboard Implementation Plan
 
-Status: stages 0–7 implemented. Non-launching source/test compilation and all
-automated suites pass. Interactive screenshot QA remains pending because the
-verification workflow does not launch the app.
+Trajectory extension status: implemented as a metadata-only historical
+destination. It reuses this plan's importer, checkpoint, and SQLite transaction
+boundaries; the Stage 0 audit currently proves only coarse outer turns, so
+finer activity families are explicit unavailable capabilities rather than
+synthetic rows.
+
+Status: stages 0–7 implemented. Non-launching source/test compilation passes;
+app-hosted automated suites and interactive screenshot QA remain pending
+because the verification workflow does not launch the app.
 
 This plan implements `docs/usage-dashboard-design.md`. It is ordered so that
 data correctness and provenance are proven before the dashboard UI can present

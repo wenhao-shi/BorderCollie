@@ -1,5 +1,11 @@
 # Trajectory: DeepSeek Harness review and BorderCollie design
 
+Implementation status: the metadata-only Trajectory destination is implemented.
+Stage 0 evidence supports the existing outer-turn records for all four
+historical providers. No fine-grained activity rows are emitted until a source
+proves stable lifecycle identity and boundaries; those families are represented
+as explicit per-session capabilities instead.
+
 ## Review scope
 
 This review examines DeepSeek Harness's `Trajectory` (`轨迹`) feature at upstream commit [`47f943859bef60e4160492346772ded9b24f765a`](https://github.com/deepseek-ai/deepseek-harness/tree/47f943859bef60e4160492346772ded9b24f765a), committed on 2026-08-13. Pinning the commit matters because the repository describes itself as a developer preview with compatibility-breaking changes expected.
@@ -301,12 +307,12 @@ Requiring an Evaluation Run before opening a session would add an unrelated work
 
 BorderCollie already discovers four local history sources and incrementally imports them through `UsageSourceImporter`. The proven outer-boundary fidelity is:
 
-| Source | Current session/turn evidence | Current quality | Fine-grained trajectory status |
+| Source | Current session/turn evidence | Current quality | Implemented Trajectory status |
 | --- | --- | --- | --- |
-| Codex | `event_msg.task_started` to `event_msg.task_complete` | Exact | Unproven until Stage 0 audits `response_item` and related records |
-| OpenCode | Assistant `time.created` to `time.completed` | Exact | Unproven until Stage 0 audits message parts and tool tables |
-| Claude Code | Human message to terminal assistant message | Inferred | Unproven; tool-use content must not be mistaken for timed tool lifecycle evidence |
-| Pi | Human message to terminal assistant message | Inferred | Unproven; tool-use content must not be mistaken for timed tool lifecycle evidence |
+| Codex | `event_msg.task_started` to `event_msg.task_complete` | Exact | Turn timing complete; model, first output, tools, nesting, retries, and compaction unavailable |
+| OpenCode | Assistant `time.created` to `time.completed` | Exact | Turn timing complete; model, first output, tools, nesting, retries, and compaction unavailable |
+| Claude Code | Human message to terminal assistant message | Inferred | Turn timing complete; model, first output, tools, nesting, retries, and compaction unavailable |
+| Pi | Human message to terminal assistant message | Inferred | Turn timing complete; model, first output, tools, nesting, retries, and compaction unavailable |
 
 “Unproven” is intentional. A source may contain a tool name without containing a trustworthy tool start, result, parent identity, or completion timestamp. The audit must assess each field separately rather than assigning one blanket fidelity level to an agent.
 
@@ -320,6 +326,28 @@ Current-code evidence:
 - `UsageActiveTurn` already carries stable session/source identity, interval, and timing quality (`BorderCollie/UsageDashboard/UsageEvaluationModels.swift:12-68`).
 - `UsageAnalyticsStore.apply(_:)` already commits events, turns, and checkpoints in one transaction (`BorderCollie/UsageDashboard/UsageAnalyticsStore.swift:84-100`).
 - The current privacy contract forbids imported content and raw paths (`docs/usage-dashboard-design.md:677-690`).
+
+### Stage 0 evidence matrix
+
+The implementation audit stays at the fields already consumed by the existing
+importers. Those fields prove the outer interval but do not prove a separate
+model request, first-output boundary, tool lifecycle, parent call, retry, or
+compaction lifecycle. The resulting capability matrix is:
+
+| Source | Turn timing | Model timing | First output | Tools | Nesting | Retries | Compaction | Usage link |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Codex rollout schema | Complete, exact (`event_msg` task markers) | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable |
+| OpenCode message schema | Complete, exact (`time.created`/`time.completed`) | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable |
+| Claude transcript schema | Complete, inferred (human/terminal assistant boundary) | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable |
+| Pi session schema | Complete, inferred (user/terminal assistant boundary) | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable | Unavailable |
+
+The supported synthetic fixtures exercise these same outer fields in
+`BorderCollieTests/UsageDashboardTests.swift`. The implementation stores one
+`.complete` `turn_timing` capability per discovered session and one
+`.unavailable` capability for every finer family. It emits no fabricated model,
+tool, retry, first-output, or compaction activity. A capability row is not a
+session source: session discovery still comes from the union of usage events,
+outer turns, and activities.
 
 ## Architecture
 
@@ -623,7 +651,7 @@ The overview lanes are:
 | Model | model requests, first-output milestone, retry, and compaction |
 | Tools | tools and recursively indented subtools |
 
-The ledger shows kind, allow-listed name/model, status, start, duration, and evidence quality. It has no content-preview column. The inspector may show identity, source kind, hierarchy, timestamps, derived duration/TTFT, normalized token buckets and cost when linked, and capability explanation. It has no Payload, Result, Prompt, Reasoning, Schema, or Command tab.
+The ledger shows kind, allow-listed name/model, status, start, duration, and evidence quality. It has no content-preview column. The inspector may show identity, source kind, hierarchy, timestamps, derived duration, normalized token buckets and cost when linked, and capability explanation. It has no Payload, Result, Prompt, Reasoning, Schema, or Command tab. The UI uses `First output` only for a proven first-output boundary; the current matrix has none, so no first-output timing is shown.
 
 ### Interaction
 

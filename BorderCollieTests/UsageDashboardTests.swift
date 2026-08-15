@@ -54,6 +54,10 @@ struct UsageDashboardTests {
         #expect(event.outputTokens == 50)
         #expect(event.reasoningOutputTokens == 25)
         #expect(event.totalTokens == 220)
+        #expect(Set(first.trajectoryCapabilities.map { $0.family }) == Set(TrajectoryCapabilityFamily.allCases))
+        #expect(first.trajectoryCapabilities.allSatisfy {
+            $0.family == .turnTiming ? $0.availability == .complete : $0.availability == .unavailable
+        })
 
         try append(claudeLine(id: "message-2") + "\n", to: file)
         let checkpoint = try #require(first.checkpoints.first)
@@ -113,6 +117,8 @@ struct UsageDashboardTests {
         #expect(turn.durationMilliseconds == 8_000)
         #expect(turn.rawModelID == "gpt-5.6-terra")
         #expect(turn.timingQuality == .exact)
+        #expect(Set(batch.trajectoryCapabilities.map { $0.family }) == Set(TrajectoryCapabilityFamily.allCases))
+        #expect(batch.trajectoryCapabilities.first { $0.family == .turnTiming }?.timingQuality == .exact)
     }
 
     @Test func piImporterPreservesProviderModelAndReportedCost() throws {
@@ -126,6 +132,8 @@ struct UsageDashboardTests {
         #expect(event.canonicalModelID == "gpt-5.6-sol")
         #expect(event.totalTokens == 100)
         #expect(event.sourceReportedCostNanodollars == 400_000_000)
+        #expect(Set(batch.trajectoryCapabilities.map { $0.family }) == Set(TrajectoryCapabilityFamily.allCases))
+        #expect(batch.trajectoryCapabilities.filter { $0.family != .turnTiming }.allSatisfy { $0.availability == .unavailable })
     }
 
     @Test func piImporterInfersTimingAcrossToolMessages() throws {
@@ -165,6 +173,8 @@ struct UsageDashboardTests {
         #expect(first.activeTurns.count == 1)
         #expect(first.activeTurns.first?.durationMilliseconds == 5_000)
         #expect(first.activeTurns.first?.timingQuality == .exact)
+        #expect(Set(first.trajectoryCapabilities.map { $0.family }) == Set(TrajectoryCapabilityFamily.allCases))
+        #expect(first.trajectoryCapabilities.first { $0.family == .turnTiming }?.availability == .complete)
         #expect(before == after)
 
         let checkpoint = try #require(first.checkpoints.first)
