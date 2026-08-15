@@ -114,7 +114,7 @@ private enum JSONLImporterStateCodec {
 
 struct ClaudeCodeUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.claudeCode
-    let importerVersion = 3
+    let importerVersion = 2
     let projectsRoot: URL
 
     init(projectsRoot: URL = UsageSourceLocations.claudeProjects()) {
@@ -164,7 +164,6 @@ struct ClaudeCodeUsageImporter: UsageSourceImporter {
         }
 
         batch.events = Array(eventsByID.values)
-        appendCurrentTrajectoryCapabilities(to: &batch)
         return batch
     }
 
@@ -283,7 +282,7 @@ struct ClaudeCodeUsageImporter: UsageSourceImporter {
 
 struct CodexUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.codex
-    let importerVersion = 3
+    let importerVersion = 2
     let sessionsRoot: URL
 
     init(sessionsRoot: URL = UsageSourceLocations.codexSessions()) {
@@ -339,7 +338,6 @@ struct CodexUsageImporter: UsageSourceImporter {
                 importerVersion: importerVersion
             ))
         }
-        appendCurrentTrajectoryCapabilities(to: &batch)
         return batch
     }
 
@@ -447,7 +445,7 @@ struct CodexUsageImporter: UsageSourceImporter {
 
 struct PiUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.pi
-    let importerVersion = 3
+    let importerVersion = 2
     let sessionsRoot: URL
 
     init(sessionsRoot: URL = UsageSourceLocations.piSessions()) {
@@ -494,7 +492,6 @@ struct PiUsageImporter: UsageSourceImporter {
                 importerVersion: importerVersion
             ))
         }
-        appendCurrentTrajectoryCapabilities(to: &batch)
         return batch
     }
 
@@ -598,7 +595,7 @@ struct PiUsageImporter: UsageSourceImporter {
 
 struct OpenCodeUsageImporter: UsageSourceImporter {
     let agent = UsageAgent.openCode
-    let importerVersion = 3
+    let importerVersion = 2
     let databaseURL: URL
 
     init(databaseURL: URL = UsageSourceLocations.openCodeDatabase()) {
@@ -738,12 +735,7 @@ struct OpenCodeUsageImporter: UsageSourceImporter {
                     ))
                 }
             } catch {
-                batch.issues.append(UsageImportIssue(
-                    agent: agent,
-                    sourceKey: sourceKey,
-                    severity: .warning,
-                    message: "Skipped an OpenCode source record; normalized metadata was invalid"
-                ))
+                batch.issues.append(UsageImportIssue(agent: agent, sourceKey: sourceKey, severity: .warning, message: "Skipped OpenCode row \(id): \(error)"))
             }
         }
 
@@ -757,7 +749,6 @@ struct OpenCodeUsageImporter: UsageSourceImporter {
             highWatermark: highWatermark,
             importerVersion: importerVersion
         ))
-        appendCurrentTrajectoryCapabilities(to: &batch)
         return batch
     }
 }
@@ -780,12 +771,11 @@ private func normalizedEpochMilliseconds(_ value: Int64) -> Int64 {
 }
 
 private func issue(agent: UsageAgent, sourceKey: String, offset: Int64, error: Error) -> UsageImportIssue {
-    _ = error
-    return UsageImportIssue(
+    UsageImportIssue(
         agent: agent,
         sourceKey: sourceKey,
         severity: .warning,
-        message: "Skipped a source record at byte \(offset); normalized metadata was invalid"
+        message: "Skipped record at byte \(offset): \(error)"
     )
 }
 
@@ -797,77 +787,6 @@ private func sqliteText(_ statement: OpaquePointer, _ index: Int32) -> String? {
 private func sqliteMessage(_ database: OpaquePointer?) -> String {
     guard let database, let message = sqlite3_errmsg(database) else { return "Unknown SQLite error" }
     return String(cString: message)
-}
-
-/// Current importer evidence stops at the existing outer-turn boundary. The
-/// capability rows are deliberately emitted from the known source schema, not
-/// from whether a particular session happened to contain a tool/model row.
-/// The fields audited here are the existing importer boundaries: Claude/Pi
-/// user-to-terminal-assistant messages, Codex task markers, and OpenCode
-/// assistant `time.created`/`time.completed` fields.
-private func appendCurrentTrajectoryCapabilities(to batch: inout UsageImportBatch) {
-    var sessionsBySource: [String: Set<String>] = [:]
-    for event in batch.events {
-        if let sessionKey = event.sessionKey {
-            sessionsBySource[event.sourceKey, default: []].insert(sessionKey)
-        }
-    }
-    for turn in batch.activeTurns {
-        sessionsBySource[turn.sourceKey, default: []].insert(turn.sessionKey)
-    }
-    for activity in batch.activities {
-        sessionsBySource[activity.sourceKey, default: []].insert(activity.sessionKey)
-    }
-
-    let timingQuality: TrajectoryBoundaryQuality =
-        batch.agent == .codex || batch.agent == .openCode ? .exact : .inferred
-    let schemaVersion: String
-    switch batch.agent {
-    case .claudeCode:
-        schemaVersion = "claude-transcript-v1"
-    case .codex:
-        schemaVersion = "codex-rollout-v1"
-    case .openCode:
-        schemaVersion = "opencode-message-v1"
-    case .pi:
-        schemaVersion = "pi-session-v1"
-    }
-
-    for (sourceKey, sessionKeys) in sessionsBySource {
-        for sessionKey in sessionKeys {
-            if let turnTiming = try? TrajectoryCapability.normalized(
-                agent: batch.agent,
-                sessionKey: sessionKey,
-                sourceKey: sourceKey,
-                family: .turnTiming,
-                availability: .complete,
-                timingQuality: timingQuality,
-                sourceSchemaVersion: schemaVersion,
-                importerVersion: importerVersion(for: batch.agent)
-            ) {
-                batch.trajectoryCapabilities.append(turnTiming)
-            }
-            for family in TrajectoryCapabilityFamily.allCases where family != .turnTiming {
-                if let unavailable = try? TrajectoryCapability.normalized(
-                    agent: batch.agent,
-                    sessionKey: sessionKey,
-                    sourceKey: sourceKey,
-                    family: family,
-                    availability: .unavailable,
-                    timingQuality: nil,
-                    sourceSchemaVersion: schemaVersion,
-                    importerVersion: importerVersion(for: batch.agent)
-                ) {
-                    batch.trajectoryCapabilities.append(unavailable)
-                }
-            }
-        }
-    }
-}
-
-private func importerVersion(for agent: UsageAgent) -> Int {
-    _ = agent
-    return 3
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

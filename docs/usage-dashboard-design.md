@@ -1,10 +1,9 @@
 # Historical Usage Dashboard Design
 
 Status: backend and dashboard UI implemented with 24h/7d/30d tracking periods;
-Evaluation Runs adds session/time scoping and active-time accounting. The
-metadata-only Trajectory destination is implemented on the same import/store
-path. Non-launching compile verification passes; app-hosted runtime QA remains
-pending because the verification workflow does not launch the app.
+Evaluation Runs adds session/time scoping and active-time accounting. Non-launching
+compile verification and the automated test suites pass, while interactive
+screenshot QA remains pending.
 
 This document defines a local historical usage dashboard for Claude Code,
 Codex, OpenCode, and Pi. It is intentionally separate from the existing
@@ -41,9 +40,6 @@ provide complete accounting data. The existing Cursor quota view is unchanged.
   OpenAI. OpenCode and Pi preserve the provider recorded by each event.
 - Unknown data remains unknown. Missing tokens or prices must not silently
   become zero.
-- Trajectory is historical and metadata-only. It reuses imported outer turns,
-  stores explicit capability states for unsupported detail, and never stores
-  transcript or tool payloads.
 
 ## Goals
 
@@ -342,9 +338,8 @@ struct UsageEvent {
 }
 ```
 
-Schema version 4 also stores `UsageActiveTurn`, `EvaluationRun`, the
-many-to-many run/session selection, `trajectory_activity`, and
-`trajectory_capability`. Imported events, active turns, trajectory metadata, and
+Schema version 3 also stores `UsageActiveTurn`, `EvaluationRun`, and the
+many-to-many run/session selection. Imported events, active turns, and
 checkpoints are committed in the same source transaction, so a failed timing
 parse cannot advance a checkpoint past data that was not indexed.
 
@@ -354,7 +349,7 @@ USD nanodollars, rather than a binary floating-point value. Conversion to
 
 ### Database Tables
 
-The local dashboard database needs six logical tables:
+The local dashboard database needs four logical tables:
 
 1. `usage_event`
    - One deduplicated accounting event.
@@ -369,12 +364,6 @@ The local dashboard database needs six logical tables:
 4. `model_alias`
    - Raw provider/model identifier to canonical pricing identifier, with an
      effective interval and provenance.
-5. `trajectory_activity`
-   - Allow-listed lifecycle metadata with stable source identity, hierarchy,
-     timestamps, ordering, status, and optional normalized usage-event link.
-6. `trajectory_capability`
-   - Per-session availability and timing quality for each trajectory detail
-     family. Capability rows do not create sessions because they have no time.
 
 Daily and model summaries should be SQL queries or ephemeral view-model data,
 not independently persisted totals. This prevents aggregate drift after a
@@ -651,23 +640,6 @@ spacing value, and metric font comes from `UsageDesign`, and every metric is a
   pricing coverage next to cost.
 - Import failure: preserve the last successful indexed data and report the
   failing source without clearing the dashboard.
-
-### Trajectory
-
-Trajectory is a fourth History destination. Its session list uses keyset
-pagination over the union of usage events, active turns, and metadata
-activities, ordered by descending `(startedAtMilliseconds, sessionKey)`. The
-selected session renders a fixed Turn/Model/Tools overview, a hierarchical
-metadata ledger, and a metadata-only inspector. `Order` is the default display
-mode; `Active time` removes gaps outside the union of outer turns, and `Clock
-time` preserves wall-clock gaps. All three modes use stable record IDs.
-
-The current source audit proves only the existing outer-turn boundary. Each
-provider therefore reports complete turn timing with exact or inferred quality
-and reports model timing, first output, tools, nesting, retries, and compaction
-as unavailable. Token/cost detail is joined only through an explicit stored
-`usageEventID`; no nearest-time association is permitted. Cursor remains quota
-only and is not a historical source.
 
 ## Proposed File Boundaries
 

@@ -78,20 +78,6 @@
 - `BorderCollie/UsageDashboard/UsageMetricStrip.swift`: normalized token, cost,
   input-cache-hit, and output-share metrics.
 - `BorderCollie/UsageDashboard/UsageBreakdownTable.swift`: model/day usage table.
-- `BorderCollie/UsageDashboard/TrajectoryModels.swift`: normalized metadata-only
-  trajectory records, capabilities, and session report contracts.
-- `BorderCollie/UsageDashboard/TrajectoryProjection.swift`: pure hierarchy,
-  ordering, lane, range, and Order/Active time/Clock time projection.
-- `BorderCollie/UsageDashboard/TrajectoryBackend.swift`: trajectory refresh and
-  keyset-paginated session/report queries.
-- `BorderCollie/UsageDashboard/TrajectoryModel.swift`: main-actor trajectory
-  paging, selection, refresh, and stale-data state.
-- `BorderCollie/UsageDashboard/TrajectoryView.swift`: Trajectory destination,
-  split layout, filters, and capability summary.
-- `BorderCollie/UsageDashboard/TrajectoryTimeline.swift`: fixed-lane metadata
-  overview.
-- `BorderCollie/UsageDashboard/TrajectoryLedger.swift`: hierarchical metadata
-  ledger and inspector.
 - `BorderCollie/UsageDashboard/UsageEvaluationModels.swift`: evaluation run,
   session, active-turn, timing-quality, and report models.
 - `BorderCollie/UsageDashboard/UsageEvaluationBackend.swift`: evaluation
@@ -198,12 +184,6 @@ are prepared for the app UI to launch.
   union all selected-session intervals for Effective wall time.
 - Read `docs/usage-dashboard-design.md` before changing import, pricing, or
   aggregation semantics.
-- Historical Trajectory reuses `UsageActiveTurn` for the only currently proven
-  outer interval. Fine model/tool/subtool/retry/compaction activity is emitted
-  only after source evidence proves stable identity and lifecycle boundaries;
-  otherwise emit a per-session unavailable capability and no synthetic row.
-- Trajectory links token/cost detail only through an explicit normalized usage
-  event ID. It never nearest-time matches records or persists source payloads.
 
 ## Common Errors And Pitfalls
 
@@ -487,8 +467,6 @@ When adding future trackers, preserve:
 - credential isolation outside SwiftUI,
 - injected clients for tests,
 - preview-only sample data.
-- Historical Trajectory remains metadata-only, refresh-driven, and excluded
-  from the live quota polling loop.
 
 ## Maintenance Notes
 
