@@ -100,7 +100,13 @@ final class MenuBarUsageViewModel: ObservableObject {
     func refresh(enabledAgentIDs: Set<String>? = nil) async {
         if let enabledAgentIDs {
             self.enabledAgentIDs = enabledAgentIDs
-            rows.removeAll { !enabledAgentIDs.contains($0.id) }
+            let currentRows = rows
+            rows = agents.compactMap { agent in
+                guard enabledAgentIDs.contains(agent.id) else {
+                    return nil
+                }
+                return currentRows.first { $0.id == agent.id } ?? Self.loadingRow(for: agent)
+            }
         }
 
         guard !isRefreshing else {

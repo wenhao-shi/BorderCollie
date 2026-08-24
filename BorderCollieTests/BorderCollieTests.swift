@@ -706,7 +706,7 @@ struct BorderCollieTests {
     }
 
     @MainActor
-    @Test func menuBarViewModelQueriesOnlyEnabledAgents() async {
+    @Test func menuBarViewModelQueriesOnlyEnabledAgentsAndRemovesDisabledRows() async {
         let codexState = CountingUsageServiceState(quota: .notFound(tool: "codex"))
         let cursorState = CountingUsageServiceState(quota: .notFound(tool: "cursor"))
         let viewModel = MenuBarUsageViewModel(
@@ -721,6 +721,28 @@ struct BorderCollieTests {
         #expect(await codexState.callCount() == 1)
         #expect(await cursorState.callCount() == 0)
         #expect(viewModel.rows.map(\.id) == ["codex"])
+
+        await viewModel.refresh(enabledAgentIDs: [])
+
+        #expect(await codexState.callCount() == 1)
+        #expect(await cursorState.callCount() == 0)
+        #expect(viewModel.rows.isEmpty)
+
+        let cursorRefresh = Task { @MainActor in
+            await viewModel.refresh(enabledAgentIDs: ["cursor"])
+        }
+        while !viewModel.isRefreshing {
+            await Task.yield()
+        }
+
+        #expect(viewModel.rows.map(\.id) == ["cursor"])
+        #expect(viewModel.rows.map(\.state) == [.loading])
+
+        await cursorRefresh.value
+
+        #expect(await codexState.callCount() == 1)
+        #expect(await cursorState.callCount() == 1)
+        #expect(viewModel.rows.map(\.state) == [.unavailable])
     }
 
     @MainActor

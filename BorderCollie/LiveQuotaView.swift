@@ -149,17 +149,26 @@ struct LiveQuotaView: View {
                 ContentUnavailableView {
                     Label("No usage limit trackers", systemImage: "gauge.with.dots.needle.bottom.0percent")
                 } description: {
-                    Text("Turn on an agent in Settings to track its usage limits.")
+                    Text("Turn on an agent from the Trackers menu to track its usage limits.")
                 } actions: {
-                    SettingsLink {
-                        Text("Open Settings")
-                    }
+                    Button("Enable all", action: enableAllTrackers)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Live quota")
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Toggle("Codex", isOn: tracksCodexBinding)
+                    Toggle("Cursor", isOn: tracksCursorBinding)
+                    Toggle("Claude Code", isOn: tracksClaudeCodeBinding)
+                } label: {
+                    Label("Trackers", systemImage: "line.3.horizontal.decrease")
+                }
+                .help("Usage limit trackers")
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     refreshAll()
@@ -210,6 +219,27 @@ struct LiveQuotaView: View {
         !usesTrackerPreferences || tracksClaudeCode
     }
 
+    private var tracksCodexBinding: Binding<Bool> {
+        Binding(
+            get: { showsCodex },
+            set: { if usesTrackerPreferences { tracksCodex = $0 } }
+        )
+    }
+
+    private var tracksCursorBinding: Binding<Bool> {
+        Binding(
+            get: { showsCursor },
+            set: { if usesTrackerPreferences { tracksCursor = $0 } }
+        )
+    }
+
+    private var tracksClaudeCodeBinding: Binding<Bool> {
+        Binding(
+            get: { showsClaudeCode },
+            set: { if usesTrackerPreferences { tracksClaudeCode = $0 } }
+        )
+    }
+
     private func refreshAll() {
         if showsCodex {
             codex.refresh()
@@ -220,6 +250,12 @@ struct LiveQuotaView: View {
         if showsClaudeCode {
             claudeCode.refresh()
         }
+    }
+
+    private func enableAllTrackers() {
+        tracksCodex = true
+        tracksCursor = true
+        tracksClaudeCode = true
     }
 
     @ViewBuilder

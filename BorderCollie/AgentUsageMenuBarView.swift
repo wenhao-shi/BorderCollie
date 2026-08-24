@@ -3,7 +3,6 @@ import SwiftUI
 
 struct AgentUsageMenuBarView: View {
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @AppStorage(UsageLimitTrackerPreferenceKey.codex) private var tracksCodex = true
     @AppStorage(UsageLimitTrackerPreferenceKey.cursor) private var tracksCursor = true
     @AppStorage(UsageLimitTrackerPreferenceKey.claudeCode) private var tracksClaudeCode = true
@@ -31,11 +30,9 @@ struct AgentUsageMenuBarView: View {
                 ContentUnavailableView {
                     Label("No trackers enabled", systemImage: "gauge.with.dots.needle.bottom.0percent")
                 } description: {
-                    Text("Turn on an agent in Settings.")
+                    Text("Turn on an agent from the Live quota toolbar.")
                 } actions: {
-                    SettingsLink {
-                        Text("Open Settings")
-                    }
+                    Button("Enable all", action: enableAllTrackers)
                 }
             } else {
                 VStack(spacing: 8) {
@@ -106,10 +103,6 @@ struct AgentUsageMenuBarView: View {
         VStack(spacing: 0) {
             MenuBarActionRow(title: "Open BorderCollie", action: showMainWindow)
 
-            MenuBarActionRow(title: "Settings…") {
-                openSettings()
-            }
-
             MenuBarActionRow(
                 title: "Quit BorderCollie",
                 shortcutHint: "⌘Q",
@@ -135,6 +128,12 @@ struct AgentUsageMenuBarView: View {
             ids.insert(LiveQuotaTracker.claudeCode.id)
         }
         return ids
+    }
+
+    private func enableAllTrackers() {
+        tracksCodex = true
+        tracksCursor = true
+        tracksClaudeCode = true
     }
 
     /// Icon on the left, usage on the right. The icon identifies the agent, so
