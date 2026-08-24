@@ -83,6 +83,7 @@ final class MenuBarUsageViewModel: ObservableObject {
     @Published private(set) var isRefreshing = false
 
     private let agents: [MenuBarUsageAgent]
+    private var enabledAgentIDs: Set<String>?
 
     init(
         agents: [MenuBarUsageAgent] = [
@@ -96,17 +97,31 @@ final class MenuBarUsageViewModel: ObservableObject {
         self.rows = initialRows ?? agents.map(Self.loadingRow(for:))
     }
 
-    func refresh() async {
+    func refresh(enabledAgentIDs: Set<String>? = nil) async {
+        if let enabledAgentIDs {
+            self.enabledAgentIDs = enabledAgentIDs
+            rows.removeAll { !enabledAgentIDs.contains($0.id) }
+        }
+
         guard !isRefreshing else {
             return
         }
 
         isRefreshing = true
-        defer {
-            isRefreshing = false
-        }
+        let requestedAgentIDs = self.enabledAgentIDs
+        let enabledAgents = requestedAgentIDs.map { enabledAgentIDs in
+            agents.filter { enabledAgentIDs.contains($0.id) }
+        } ?? agents
+        let queriedRows = await Self.queryRows(for: enabledAgents)
 
-        rows = await Self.queryRows(for: agents)
+        rows = self.enabledAgentIDs.map { enabledAgentIDs in
+            queriedRows.filter { enabledAgentIDs.contains($0.id) }
+        } ?? queriedRows
+        isRefreshing = false
+
+        if requestedAgentIDs != self.enabledAgentIDs {
+            await refresh()
+        }
     }
 
     private nonisolated static func queryRows(for agents: [MenuBarUsageAgent]) async -> [MenuBarUsageRow] {

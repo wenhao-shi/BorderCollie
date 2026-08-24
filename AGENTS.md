@@ -24,6 +24,8 @@
 - `BorderCollie/AgentUsageMenuBarView.swift`: menu-bar usage popup UI.
 - `BorderCollie/MenuBarUsageViewModel.swift`: menu-bar refresh orchestration,
   row state, and compact provider summaries.
+- `BorderCollie/UsageLimitTrackerSettingsView.swift`: durable per-provider
+  usage-limit tracker preferences and the Settings window UI.
 - `BorderCollie/UsageQuotaQuery.swift`: shared timeout wrapper for quota
   queries.
 - `BorderCollie/LiveQuotaView.swift`: the single `Live quota` page, the
@@ -94,6 +96,12 @@
 
 ## Common Commands
 
+Use this to build and launch the current Debug app:
+
+```sh
+./script/build_and_run.sh
+```
+
 Use this for non-launching compile verification:
 
 ```sh
@@ -107,6 +115,9 @@ are prepared for the app UI to launch.
 
 - Every tracked provider is a section on the one `Live quota` page, in order
   Codex, Cursor, Claude Code. Do not give a tracker its own sidebar destination.
+- A user can disable each provider in Settings. A disabled provider is hidden
+  from both Live quota and the menu-bar popup, and it must not make quota
+  requests.
 - Each section keeps its own view model, cadence, and failure state; one
   provider failing must never blank another.
 - Query automatically when the Live quota page opens.

@@ -96,11 +96,16 @@ struct LiveQuotaTracker: Identifiable, Sendable {
 /// they share a page, because comparing them was previously three sidebar
 /// clicks apart.
 struct LiveQuotaView: View {
+    @AppStorage(UsageLimitTrackerPreferenceKey.codex) private var tracksCodex = true
+    @AppStorage(UsageLimitTrackerPreferenceKey.cursor) private var tracksCursor = true
+    @AppStorage(UsageLimitTrackerPreferenceKey.claudeCode) private var tracksClaudeCode = true
+
     @StateObject private var codex: UsageTrackerViewModel
     @StateObject private var cursor: UsageTrackerViewModel
     @StateObject private var claudeCode: UsageTrackerViewModel
 
     private let runsAutoRefresh: Bool
+    private let usesTrackerPreferences: Bool
 
     @MainActor
     init(runsAutoRefresh: Bool = true) {
@@ -108,6 +113,7 @@ struct LiveQuotaView: View {
         _cursor = StateObject(wrappedValue: UsageTrackerViewModel(service: LiveQuotaTracker.cursor.service))
         _claudeCode = StateObject(wrappedValue: UsageTrackerViewModel(service: LiveQuotaTracker.claudeCode.service))
         self.runsAutoRefresh = runsAutoRefresh
+        self.usesTrackerPreferences = true
     }
 
     @MainActor
@@ -121,15 +127,36 @@ struct LiveQuotaView: View {
         _cursor = StateObject(wrappedValue: cursor)
         _claudeCode = StateObject(wrappedValue: claudeCode)
         self.runsAutoRefresh = runsAutoRefresh
+        self.usesTrackerPreferences = false
     }
 
     var body: some View {
-        Form {
-            trackerSection(.codex, viewModel: codex)
-            trackerSection(.cursor, viewModel: cursor)
-            trackerSection(.claudeCode, viewModel: claudeCode)
+        Group {
+            if hasEnabledTrackers {
+                Form {
+                    if showsCodex {
+                        trackerSection(.codex, viewModel: codex)
+                    }
+                    if showsCursor {
+                        trackerSection(.cursor, viewModel: cursor)
+                    }
+                    if showsClaudeCode {
+                        trackerSection(.claudeCode, viewModel: claudeCode)
+                    }
+                }
+                .formStyle(.grouped)
+            } else {
+                ContentUnavailableView {
+                    Label("No usage limit trackers", systemImage: "gauge.with.dots.needle.bottom.0percent")
+                } description: {
+                    Text("Turn on an agent in Settings to track its usage limits.")
+                } actions: {
+                    SettingsLink {
+                        Text("Open Settings")
+                    }
+                }
+            }
         }
-        .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Live quota")
         .toolbar {
@@ -144,25 +171,55 @@ struct LiveQuotaView: View {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
                 }
-                .disabled(isRefreshing)
+                .disabled(isRefreshing || !hasEnabledTrackers)
                 .keyboardShortcut("r", modifiers: .command)
             }
         }
         // One loop per provider, so Claude's slower cadence does not drag the
         // other two and a slow provider cannot delay its neighbours' polls.
-        .task { await autoRefresh(codex, every: LiveQuotaTracker.codex.refreshInterval) }
-        .task { await autoRefresh(cursor, every: LiveQuotaTracker.cursor.refreshInterval) }
-        .task { await autoRefresh(claudeCode, every: LiveQuotaTracker.claudeCode.refreshInterval) }
+        .task(id: showsCodex) {
+            await autoRefresh(codex, enabled: showsCodex, every: LiveQuotaTracker.codex.refreshInterval)
+        }
+        .task(id: showsCursor) {
+            await autoRefresh(cursor, enabled: showsCursor, every: LiveQuotaTracker.cursor.refreshInterval)
+        }
+        .task(id: showsClaudeCode) {
+            await autoRefresh(claudeCode, enabled: showsClaudeCode, every: LiveQuotaTracker.claudeCode.refreshInterval)
+        }
     }
 
     private var isRefreshing: Bool {
-        codex.isLoading || cursor.isLoading || claudeCode.isLoading
+        (showsCodex && codex.isLoading)
+            || (showsCursor && cursor.isLoading)
+            || (showsClaudeCode && claudeCode.isLoading)
+    }
+
+    private var hasEnabledTrackers: Bool {
+        showsCodex || showsCursor || showsClaudeCode
+    }
+
+    private var showsCodex: Bool {
+        !usesTrackerPreferences || tracksCodex
+    }
+
+    private var showsCursor: Bool {
+        !usesTrackerPreferences || tracksCursor
+    }
+
+    private var showsClaudeCode: Bool {
+        !usesTrackerPreferences || tracksClaudeCode
     }
 
     private func refreshAll() {
-        codex.refresh()
-        cursor.refresh()
-        claudeCode.refresh()
+        if showsCodex {
+            codex.refresh()
+        }
+        if showsCursor {
+            cursor.refresh()
+        }
+        if showsClaudeCode {
+            claudeCode.refresh()
+        }
     }
 
     @ViewBuilder
@@ -324,7 +381,16 @@ struct LiveQuotaView: View {
     }
 
     @MainActor
-    private func autoRefresh(_ viewModel: UsageTrackerViewModel, every interval: Duration) async {
+    private func autoRefresh(
+        _ viewModel: UsageTrackerViewModel,
+        enabled: Bool,
+        every interval: Duration
+    ) async {
+        guard enabled else {
+            viewModel.cancelRefresh()
+            return
+        }
+
         guard runsAutoRefresh, !Self.isRunningInXcodePreview else {
             return
         }

@@ -3,23 +3,45 @@ import SwiftUI
 
 struct AgentUsageMenuBarView: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage(UsageLimitTrackerPreferenceKey.codex) private var tracksCodex = true
+    @AppStorage(UsageLimitTrackerPreferenceKey.cursor) private var tracksCursor = true
+    @AppStorage(UsageLimitTrackerPreferenceKey.claudeCode) private var tracksClaudeCode = true
     @StateObject private var viewModel: MenuBarUsageViewModel
 
     private let runsAutoRefresh: Bool
+    private let usesTrackerPreferences: Bool
 
     @MainActor
-    init(viewModel: MenuBarUsageViewModel? = nil, runsAutoRefresh: Bool = true) {
+    init(
+        viewModel: MenuBarUsageViewModel? = nil,
+        runsAutoRefresh: Bool = true,
+        usesTrackerPreferences: Bool = true
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel ?? MenuBarUsageViewModel())
         self.runsAutoRefresh = runsAutoRefresh
+        self.usesTrackerPreferences = usesTrackerPreferences
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            VStack(spacing: 8) {
-                ForEach(viewModel.rows) { row in
-                    usageRow(row)
+            if enabledAgentIDs.isEmpty {
+                ContentUnavailableView {
+                    Label("No trackers enabled", systemImage: "gauge.with.dots.needle.bottom.0percent")
+                } description: {
+                    Text("Turn on an agent in Settings.")
+                } actions: {
+                    SettingsLink {
+                        Text("Open Settings")
+                    }
+                }
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(viewModel.rows.filter { enabledAgentIDs.contains($0.id) }) { row in
+                        usageRow(row)
+                    }
                 }
             }
 
@@ -30,7 +52,12 @@ struct AgentUsageMenuBarView: View {
         .padding(14)
         .frame(width: 360, alignment: .topLeading)
         .task {
-            await runAutoRefreshLoop()
+            await runAutoRefreshLoop(enabledAgentIDs: enabledAgentIDs)
+        }
+        .onChange(of: enabledAgentIDs) { _, enabledAgentIDs in
+            Task {
+                await viewModel.refresh(enabledAgentIDs: enabledAgentIDs)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .borderCollieShowMainWindow)) { _ in
             showMainWindow()
@@ -53,7 +80,7 @@ struct AgentUsageMenuBarView: View {
     private var refreshButton: some View {
         Button {
             Task {
-                await viewModel.refresh()
+                await viewModel.refresh(enabledAgentIDs: enabledAgentIDs)
             }
         } label: {
             Group {
@@ -68,7 +95,7 @@ struct AgentUsageMenuBarView: View {
             .frame(width: 24, height: 24)
         }
         .buttonStyle(.borderless)
-        .disabled(viewModel.isRefreshing)
+        .disabled(viewModel.isRefreshing || enabledAgentIDs.isEmpty)
         .accessibilityLabel("Refresh")
         .help("Refresh")
     }
@@ -79,6 +106,10 @@ struct AgentUsageMenuBarView: View {
         VStack(spacing: 0) {
             MenuBarActionRow(title: "Open BorderCollie", action: showMainWindow)
 
+            MenuBarActionRow(title: "Settings…") {
+                openSettings()
+            }
+
             MenuBarActionRow(
                 title: "Quit BorderCollie",
                 shortcutHint: "⌘Q",
@@ -86,6 +117,24 @@ struct AgentUsageMenuBarView: View {
             )
             .keyboardShortcut("q", modifiers: .command)
         }
+    }
+
+    private var enabledAgentIDs: Set<String> {
+        guard usesTrackerPreferences else {
+            return Set(LiveQuotaTracker.all.map(\.id))
+        }
+
+        var ids: Set<String> = []
+        if tracksCodex {
+            ids.insert(LiveQuotaTracker.codex.id)
+        }
+        if tracksCursor {
+            ids.insert(LiveQuotaTracker.cursor.id)
+        }
+        if tracksClaudeCode {
+            ids.insert(LiveQuotaTracker.claudeCode.id)
+        }
+        return ids
     }
 
     /// Icon on the left, usage on the right. The icon identifies the agent, so
@@ -130,12 +179,12 @@ struct AgentUsageMenuBarView: View {
     }
 
     @MainActor
-    private func runAutoRefreshLoop() async {
+    private func runAutoRefreshLoop(enabledAgentIDs: Set<String>) async {
         guard runsAutoRefresh, !Self.isRunningInXcodePreview else {
             return
         }
 
-        await viewModel.refresh()
+        await viewModel.refresh(enabledAgentIDs: enabledAgentIDs)
 
         while !Task.isCancelled {
             do {
@@ -212,7 +261,11 @@ private struct MenuBarActionRow: View {
 struct AgentUsageMenuBarView_Previews: PreviewProvider {
     @MainActor
     static var previews: some View {
-        AgentUsageMenuBarView(viewModel: .preview, runsAutoRefresh: false)
+        AgentUsageMenuBarView(
+            viewModel: .preview,
+            runsAutoRefresh: false,
+            usesTrackerPreferences: false
+        )
             .previewDisplayName("Menu Bar Usage")
     }
 }

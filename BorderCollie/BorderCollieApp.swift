@@ -21,6 +21,10 @@ struct BorderCollieApp: App {
         .defaultSize(width: 1_100, height: 740)
         .windowResizability(.contentMinSize)
 
+        Settings {
+            UsageLimitTrackerSettingsView()
+        }
+
         MenuBarExtra {
             AgentUsageMenuBarView()
         } label: {

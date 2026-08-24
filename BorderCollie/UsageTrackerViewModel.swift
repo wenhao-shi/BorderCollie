@@ -45,4 +45,8 @@ final class UsageTrackerViewModel: ObservableObject {
             }
         }
     }
+
+    func cancelRefresh() {
+        refreshTask?.cancel()
+    }
 }

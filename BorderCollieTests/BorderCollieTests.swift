@@ -706,6 +706,24 @@ struct BorderCollieTests {
     }
 
     @MainActor
+    @Test func menuBarViewModelQueriesOnlyEnabledAgents() async {
+        let codexState = CountingUsageServiceState(quota: .notFound(tool: "codex"))
+        let cursorState = CountingUsageServiceState(quota: .notFound(tool: "cursor"))
+        let viewModel = MenuBarUsageViewModel(
+            agents: [
+                .codex(service: CountingUsageTrackingService(toolID: "codex", state: codexState)),
+                .cursor(service: CountingUsageTrackingService(toolID: "cursor", state: cursorState)),
+            ]
+        )
+
+        await viewModel.refresh(enabledAgentIDs: ["codex"])
+
+        #expect(await codexState.callCount() == 1)
+        #expect(await cursorState.callCount() == 0)
+        #expect(viewModel.rows.map(\.id) == ["codex"])
+    }
+
+    @MainActor
     @Test func menuBarViewModelMapsUnsuccessfulQuotaStates() async {
         let viewModel = MenuBarUsageViewModel(
             agents: [
