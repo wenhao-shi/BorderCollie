@@ -8,7 +8,7 @@ window, not a replacement for it.
 
 - Let the user check all tracked agent usage without opening or navigating the
   main window.
-- Preserve the app's usage semantics: show usage consumed.
+- Preserve the app's usage semantics: show usage remaining.
 - Keep the popup compact enough for frequent use from the menu bar.
 - Reuse the same credential, API, timeout, and display-normalization paths as
   the main tracker pages.
@@ -46,14 +46,14 @@ and main window, or **Quit BorderCollie** / Cmd+Q to exit fully.
 
 The popup uses a single compact column:
 
-- Header: `Usage consumed` with a gauge icon.
+- Header: `Usage remaining` with a gauge icon.
 - Header action: icon-only refresh button using `arrow.clockwise`, swapping to a
   small `ProgressView` while a refresh is in flight. Do not signal the in-flight
   state by dimming the icon; the window surfaces use the same swap.
 - Body: one row per tracked agent, with the agent's brand icon on the left and
   its usage rows on the right. The agent name is carried only as an
   accessibility label, since the icon identifies it.
-- Each usage row shows label, used percentage, absolute reset time, and a
+- Each usage row shows label, remaining percentage, absolute reset time, and a
   threshold-tinted progress bar.
 - Rows fill with `.quaternary` over the popover's own material. Do not use
   `controlBackgroundColor`: that is the backdrop drawn *behind* controls, and it
@@ -87,24 +87,24 @@ Compact summaries are provider-specific because the quota windows differ.
 Codex:
 
 ```text
-5h: 20% | 7d: 10%
+5h: 80% | 7d: 90%
 ```
 
 Cursor:
 
 ```text
-Auto: 5% | API: 40%
+Auto: 95% | API: 60%
 ```
 
 Claude Code:
 
 ```text
-5h: 48% | 7d: 64%
+5h: 52% | 7d: 36%
 ```
 
-Percentages are usage consumed. Provider-reported used percentage remains in
-`QuotaTier.utilization`; compact display code clamps it to `0...100` and rounds
-it to a whole percentage.
+Percentages are usage remaining. Provider-reported used percentage remains in
+`QuotaTier.utilization`; compact display code clamps it to `0...100`, derives
+remaining as `100 - used`, and rounds it to a whole percentage.
 
 Missing compact tiers render as `--`.
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Column-aligned usage rows: label, used percentage, reset time, with an
+/// Column-aligned usage rows: label, remaining percentage, reset time, with an
 /// optional progress bar spanning the row beneath each entry.
 ///
 /// The compact layout, used by the menu-bar panel. The window uses a grouped
@@ -34,9 +34,9 @@ struct UsageLimitsGrid: View {
 
                 if showsProgressBars {
                     GridRow {
-                        ProgressView(value: limit.usedPercentage, total: 100)
+                        ProgressView(value: limit.remainingPercentage, total: 100)
                             .controlSize(.small)
-                            .tint(limit.usedPercentage.quotaTint)
+                            .tint(limit.remainingPercentage.quotaTint)
                             .gridCellColumns(3)
                             .padding(.bottom, 4)
                     }

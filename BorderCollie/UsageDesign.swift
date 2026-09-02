@@ -78,16 +78,17 @@ struct MetricTile: View {
     }
 }
 
-/// Threshold tint for a consumed-quota bar.
+/// Threshold tint for a remaining-quota bar.
 ///
-/// Colour reinforces the percentage that is already written beside the bar; it
-/// is never the only channel carrying the value.
+/// Colour reinforces the remaining percentage that is already written beside
+/// the bar; it is never the only channel carrying the value. The thresholds
+/// preserve the prior warning levels after inverting the displayed value.
 extension Double {
     var quotaTint: Color {
         switch self {
-        case ..<75: .accentColor
-        case ..<90: .orange
-        default: .red
+        case let remaining where remaining <= 10: .red
+        case let remaining where remaining <= 25: .orange
+        default: .accentColor
         }
     }
 }

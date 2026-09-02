@@ -363,7 +363,7 @@ struct LiveQuotaView: View {
                 Text(limit.percentageText)
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                    .animation(.smooth(duration: 0.28), value: limit.usedPercentage)
+                    .animation(.smooth(duration: 0.28), value: limit.remainingPercentage)
                     .foregroundStyle(limit.tier == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
 
                 Text(UsageLimitDisplay.resetLabel(for: limit))
@@ -373,14 +373,14 @@ struct LiveQuotaView: View {
                     .frame(minWidth: 104, alignment: .leading)
             }
 
-            ProgressView(value: limit.usedPercentage, total: 100)
-                .tint(limit.usedPercentage.quotaTint)
-                .animation(.smooth(duration: 0.28), value: limit.usedPercentage)
+            ProgressView(value: limit.remainingPercentage, total: 100)
+                .tint(limit.remainingPercentage.quotaTint)
+                .animation(.smooth(duration: 0.28), value: limit.remainingPercentage)
         }
         .padding(.vertical, UsageDesign.Spacing.tight)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(limit.title)
-        .accessibilityValue("\(limit.percentageText) consumed, \(UsageLimitDisplay.resetLabel(for: limit))")
+        .accessibilityValue("\(limit.percentageText) remaining, \(UsageLimitDisplay.resetLabel(for: limit))")
     }
 
     /// Per-provider recovery. The toolbar's Refresh covers all three, but a

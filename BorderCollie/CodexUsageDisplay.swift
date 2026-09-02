@@ -67,15 +67,16 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
     let title: String
     let tier: QuotaTier?
 
-    var usedPercentage: Double { usedPercentage(from: tier?.utilization) }
+    /// Remaining percentage derived from the provider-reported used value.
+    /// Missing tiers return zero for progress-bar compatibility; text keeps
+    /// them unavailable as `--`.
+    var remainingPercentage: Double {
+        UsagePercentageDisplay.remainingPercentage(from: tier)
+    }
     var resetsAt: String? { tier?.resetsAt }
 
     var percentageText: String {
-        guard tier != nil else {
-            return "--"
-        }
-
-        return "\(usedPercentage.formatted(.number.precision(.fractionLength(0...1))))%"
+        UsagePercentageDisplay.percentageText(for: tier)
     }
 
     func resetText(now: Date = Date(), timeZone: TimeZone = .current) -> String? {
@@ -99,13 +100,6 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
         return "resets \(reset)"
     }
 
-    private func usedPercentage(from utilization: Double?) -> Double {
-        guard let utilization else {
-            return 0
-        }
-
-        return min(max(utilization, 0), 100)
-    }
 }
 
 enum CodexUsageLimitKind: String, CaseIterable, Identifiable, Sendable {
@@ -139,15 +133,13 @@ struct CodexUsageLimitDisplay: Identifiable, Equatable, Sendable {
 
     var id: String { kind.id }
     var title: String { kind.title }
-    var usedPercentage: Double { usedPercentage(from: tier?.utilization) }
+    var remainingPercentage: Double {
+        UsagePercentageDisplay.remainingPercentage(from: tier)
+    }
     var resetsAt: String? { tier?.resetsAt }
 
     var percentageText: String {
-        guard tier != nil else {
-            return "--"
-        }
-
-        return "\(usedPercentage.formatted(.number.precision(.fractionLength(0...1))))%"
+        UsagePercentageDisplay.percentageText(for: tier)
     }
 
     func resetText(now: Date = Date(), timeZone: TimeZone = .current) -> String? {
@@ -179,15 +171,30 @@ struct CodexUsageLimitDisplay: Identifiable, Equatable, Sendable {
             .joined(separator: " | ")
     }
 
-    private func usedPercentage(from utilization: Double?) -> Double {
-        guard let utilization else {
+}
+
+enum UsagePercentageDisplay {
+    /// The normalized model stores provider-reported used percentage. The
+    /// live UI consistently displays the complementary remaining percentage.
+    /// A missing tier gets zero for numeric progress APIs; callers use the
+    /// tier presence to render unavailable text instead of `100%`.
+    static func remainingPercentage(from tier: QuotaTier?) -> Double {
+        guard let tier else {
             return 0
         }
 
-        return min(max(utilization, 0), 100)
+        let used = min(max(tier.utilization, 0), 100)
+        return 100 - used
     }
 
+    static func percentageText(for tier: QuotaTier?) -> String {
+        guard tier != nil else {
+            return "--"
+        }
 
+        let remaining = remainingPercentage(from: tier)
+        return "\(remaining.formatted(.number.precision(.fractionLength(0...1))))%"
+    }
 }
 
 enum CompactUsageDisplay {
@@ -196,8 +203,8 @@ enum CompactUsageDisplay {
             return "--"
         }
 
-        let used = min(max(tier.utilization, 0), 100)
-        return "\(Int(used.rounded()))%"
+        let remaining = UsagePercentageDisplay.remainingPercentage(from: tier)
+        return "\(Int(remaining.rounded()))%"
     }
 
 }

@@ -16,7 +16,7 @@ changing or implementing that dashboard.
 
 ## Goals
 
-- Show usage consumed for each supported coding agent.
+- Show usage remaining for each supported coding agent.
 - Query automatically when a tracker page opens.
 - Query automatically when the menu-bar usage popup opens.
 - Refresh automatically on a fixed cadence without user configuration.
@@ -43,7 +43,7 @@ The `Live quota` screen defines the product standard for future trackers:
 - Auth implementation details are not shown in any user-facing string, in the
   happy path or in an error. "Not signed in to Codex", never "No Codex OAuth
   credentials found".
-- Usage percentages and progress bars represent usage consumed.
+- Usage percentages and progress bars represent usage remaining.
 - The page is a grouped `Form` that fills its pane, one `Section` per tracker.
   The section header carries the agent's brand icon and name; the footer carries
   extra-usage and the updated timestamp. Do not lay a tracker out as a
@@ -53,7 +53,7 @@ The `Live quota` screen defines the product standard for future trackers:
   offers its own Refresh inline, where its message is.
 - Each usage window is shown as:
   - A human label, such as `5h` or `7d`.
-  - Used percentage, not remaining percentage.
+  - Remaining percentage, derived from the provider-reported used value.
   - An absolute reset time. See
     `docs/claude-oauth-refresh-and-usage-ui.md` for the precision rules.
   - A native SwiftUI `ProgressView` bar, tinted by `Double.quotaTint` so a bar
@@ -84,10 +84,10 @@ The menu-bar companion follows the same usage semantics in a compact format:
   60 seconds and back off for at least five minutes after HTTP 429.
 - A compact row is shown for each tracked agent, ordered `Codex`, then
   `Cursor`, then `Claude Code`.
-- Codex compact format: `5h: 20% | 7d: 10%`.
-- Cursor compact format: `Auto: 5% | API: 40%`.
-- Claude Code compact format: `5h: 48% | 7d: 64%`.
-- Compact percentages are usage consumed, rounded to whole percentages.
+- Codex compact format: `5h: 80% | 7d: 90%`.
+- Cursor compact format: `Auto: 95% | API: 60%`.
+- Claude Code compact format: `5h: 52% | 7d: 36%`.
+- Compact percentages are usage remaining, rounded to whole percentages.
 - Missing compact tiers show `--`.
 - Detailed menu-bar UI and row-state rules live in
   `docs/menubar-item-design.me`.
@@ -168,7 +168,8 @@ Represents one quota window:
 - `resetsAt`: reset timestamp as an ISO 8601 string when available.
 
 Important: `utilization` stores used percentage, not remaining percentage. The
-display layer clamps and renders it directly.
+display layer clamps it and derives the displayed remaining value as `100 -
+used`.
 
 ### `SubscriptionQuota`
 
@@ -295,8 +296,8 @@ Current response mapping:
 - `planUsage.autoPercentUsed` becomes `cursor_auto_composer`.
 - `planUsage.apiPercentUsed` becomes `cursor_api`.
 - `billingCycleEnd` maps to each tier reset timestamp.
-- Cursor reports current monthly used percentages; display renders them as
-  consumed usage.
+- Cursor reports current monthly used percentages; display derives remaining
+  usage from them.
 
 Known Cursor windows:
 
@@ -419,7 +420,7 @@ Reuse the current tracker detail pattern:
 - Toolbar refresh button with `arrow.clockwise`, swapping to a `ProgressView`
   while the query is in flight.
 - Fixed 30-second auto refresh loop.
-- Grouped `Form` showing consumed percentages, filling the pane.
+- Grouped `Form` showing remaining percentages, filling the pane.
 - Native `ProgressView` bars, threshold-tinted.
 - Static `Updated at <time>` timestamp in the section footer.
 - Every radius, spacing value, and metric font from `UsageDesign`; no new
@@ -438,9 +439,10 @@ For the menu bar, reuse the compact companion pattern:
 
 Reuse these rules:
 
-- Show used percentage.
-- Store used percentage in the data model.
-- Clamp used percentage to `0...100`.
+- Show remaining percentage.
+- Store provider-reported used percentage in the data model.
+- Clamp the provider-reported used percentage to `0...100`, then derive
+  remaining as `100 - used` in shared display policy.
 - Use monospaced digits for percentages and reset values.
 - Show absolute reset times, never countdowns: a countdown is correct only at
   the instant it renders.
@@ -448,7 +450,7 @@ Reuse these rules:
   rule in `UsageResetFormatting` covers every tracker; do not add per-window
   formatting styles.
 - Do not show credential details in any user-facing string.
-- Compact menu-bar summaries should use whole-number used percentages.
+- Compact menu-bar summaries should use whole-number remaining percentages.
 - Numbers that change on refresh use `.contentTransition(.numericText())`.
 
 ### View Model Behavior
@@ -469,7 +471,8 @@ Reuse the current testing style:
 
 - Unit tests for response normalization.
 - Unit tests for credential parsing.
-- Unit tests for display clamping and formatting of used percentage.
+- Unit tests for display clamping, inversion, and formatting of remaining
+  percentage.
 - Tests for reset formatting.
 - Tests for compact menu-bar summary strings and row-state mapping.
 - Capturing fake HTTP clients instead of real network calls.
@@ -671,8 +674,9 @@ Timeout:
 
 ### Inverting provider-reported used percentage
 
-Providers often report used percentage. The UI also shows used percentage, so
-keep the model value and render it directly after clamping to `0...100`.
+Providers often report used percentage. Keep that value in the normalized
+model, clamp it to `0...100`, and derive the UI's remaining percentage as
+`100 - used` in shared display policy.
 
 ### Relative updated timestamps
 

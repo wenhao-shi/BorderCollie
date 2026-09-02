@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import BorderCollie
 
@@ -26,7 +27,7 @@ struct BorderCollieTests {
         )
     }
 
-    @Test func codexUsageLimitDisplayShowsUsedUsageAndResetText() {
+    @Test func codexUsageLimitDisplayShowsRemainingUsageAndResetText() {
         let quota = SubscriptionQuota(
             tool: "codex",
             credentialStatus: .valid,
@@ -49,7 +50,8 @@ struct BorderCollieTests {
         let utc = TimeZone(secondsFromGMT: 0)!
 
         #expect(limits.map(\.title) == ["5h", "7d"])
-        #expect(limits.map(\.percentageText) == ["80%", "40%"])
+        #expect(limits.map(\.remainingPercentage) == [20, 60])
+        #expect(limits.map(\.percentageText) == ["20%", "60%"])
         // ICU uses a narrow no-break space (U+202F) before AM/PM.
         #expect(
             limits.map {
@@ -59,7 +61,7 @@ struct BorderCollieTests {
         )
     }
 
-    @Test func cursorUsageLimitDisplayShowsMonthlyBuckets() {
+    @Test func cursorUsageLimitDisplayShowsMonthlyRemainingBuckets() {
         let quota = SubscriptionQuota(
             tool: "cursor",
             credentialStatus: .valid,
@@ -77,11 +79,40 @@ struct BorderCollieTests {
         let limits = CursorUsageLimitDisplay.usageLimits(from: quota)
 
         #expect(limits.map(\.title) == ["Auto + Composer", "API"])
-        #expect(limits.map(\.percentageText) == ["1.2%", "0%"])
+        #expect(limits.map(\.percentageText) == ["98.8%", "100%"])
         #expect(limits.map { $0.resetText(timeZone: TimeZone(secondsFromGMT: 0)!) } == ["Jul 30", "Jul 30"])
     }
 
-    @Test func codexCompactSummaryShowsUsedUsage() {
+    @Test func remainingDisplayPolicyUsesClampedUsedInputAndZeroFallbackForMissingTier() {
+        let cases: [(used: Double?, remaining: Double, detailed: String, compact: String)] = [
+            (80, 20, "20%", "20%"),
+            (40, 60, "60%", "60%"),
+            (0, 100, "100%", "100%"),
+            (1.25, 98.75, "98.8%", "99%"),
+            (20.4, 79.6, "79.6%", "80%"),
+            (-2, 100, "100%", "100%"),
+            (125, 0, "0%", "0%"),
+            (nil, 0, "--", "--"),
+        ]
+
+        for (used, remaining, detailed, compact) in cases {
+            let tier = used.map { QuotaTier(name: "five_hour", utilization: $0, resetsAt: nil) }
+            let limit = UsageLimitDisplay(id: "five_hour", title: "5h", tier: tier)
+
+            #expect(limit.remainingPercentage == remaining)
+            #expect(limit.percentageText == detailed)
+            #expect(CompactUsageDisplay.percentageText(for: tier) == compact)
+        }
+    }
+
+    @Test func remainingQuotaTintUsesExactWarningBoundaries() {
+        #expect(25.0.quotaTint == .orange)
+        #expect(10.0.quotaTint == .red)
+        #expect(25.01.quotaTint == .accentColor)
+        #expect(10.01.quotaTint == .orange)
+    }
+
+    @Test func codexCompactSummaryShowsRemainingUsage() {
         let quota = SubscriptionQuota(
             tool: "codex",
             credentialStatus: .valid,
@@ -96,10 +127,10 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(CodexUsageLimitDisplay.compactSummary(from: quota) == "5h: 20% | 7d: 10%")
+        #expect(CodexUsageLimitDisplay.compactSummary(from: quota) == "5h: 80% | 7d: 90%")
     }
 
-    @Test func cursorCompactSummaryShowsUsedUsage() {
+    @Test func cursorCompactSummaryShowsRemainingUsage() {
         let quota = SubscriptionQuota(
             tool: "cursor",
             credentialStatus: .valid,
@@ -114,10 +145,10 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(CursorUsageLimitDisplay.compactSummary(from: quota) == "Auto: 5% | API: 40%")
+        #expect(CursorUsageLimitDisplay.compactSummary(from: quota) == "Auto: 95% | API: 60%")
     }
 
-    @Test func compactSummaryHandlesMissingClampedAndRoundedTiers() {
+    @Test func compactSummaryHandlesMissingClampedAndRoundedRemainingTiers() {
         let codexQuota = SubscriptionQuota(
             tool: "codex",
             credentialStatus: .valid,
@@ -144,9 +175,9 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(CodexUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 20% | 7d: --")
-        #expect(CursorUsageLimitDisplay.compactSummary(from: cursorQuota) == "Auto: 0% | API: 100%")
-        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 20% | 7d: --")
+        #expect(CodexUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
+        #expect(CursorUsageLimitDisplay.compactSummary(from: cursorQuota) == "Auto: 100% | API: 0%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
     }
 
     @Test func credentialParserRejectsNonChatGPTOAuthMode() {
@@ -361,7 +392,7 @@ struct BorderCollieTests {
     }
 
 
-    @Test func claudeCompactSummaryShowsUsedUsage() {
+    @Test func claudeCompactSummaryShowsRemainingUsage() {
         let quota = SubscriptionQuota(
             tool: "claude_code",
             credentialStatus: .valid,
@@ -376,7 +407,7 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 48% | 7d: 64%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 52% | 7d: 36%")
     }
 
     @Test func claudeCredentialParserReadsValidOAuthToken() {
@@ -659,7 +690,7 @@ struct BorderCollieTests {
 
         #expect(await probe.maxRunningCount() == 3)
         #expect(viewModel.rows.map(\.title) == ["Codex", "Cursor", "Claude Code"])
-        #expect(viewModel.rows.map(\.detail) == ["5h: 20% | 7d: 10%", "Sign in required", "5h: 48% | 7d: 64%"])
+        #expect(viewModel.rows.map(\.detail) == ["5h: 80% | 7d: 90%", "Sign in required", "5h: 52% | 7d: 36%"])
         #expect(viewModel.rows.map(\.state) == [.success, .unavailable, .success])
     }
 
@@ -685,7 +716,7 @@ struct BorderCollieTests {
                 .codex(service: CountingUsageTrackingService(toolID: "codex", state: serviceState)),
             ],
             initialRows: [
-                MenuBarUsageRow(id: "codex", title: "Codex", icon: .codex, detail: "5h: 20% | 7d: 10%", state: .success),
+                MenuBarUsageRow(id: "codex", title: "Codex", icon: .codex, detail: "5h: 80% | 7d: 90%", state: .success),
             ]
         )
 
@@ -696,13 +727,13 @@ struct BorderCollieTests {
             await Task.yield()
         }
 
-        #expect(viewModel.rows.first?.detail == "5h: 20% | 7d: 10%")
+        #expect(viewModel.rows.first?.detail == "5h: 80% | 7d: 90%")
 
         await viewModel.refresh()
         await refreshTask.value
 
         #expect(await serviceState.callCount() == 1)
-        #expect(viewModel.rows.first?.detail == "5h: 25% | 7d: 15%")
+        #expect(viewModel.rows.first?.detail == "5h: 75% | 7d: 85%")
     }
 
     @MainActor
@@ -1056,6 +1087,7 @@ extension BorderCollieTests {
 
         let limits = ClaudeUsageLimitDisplay.usageLimits(from: quota)
         #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable", "7d · Opus"])
+        #expect(limits.map(\.percentageText) == ["52%", "36%", "70%", "88%"])
     }
 
     @Test func resetTextPrecisionFollowsDistanceNotWindowLength() {
@@ -1103,7 +1135,7 @@ extension BorderCollieTests {
         #expect(reset("2026-08-07T23:30:00Z") == "11:30 PM")
     }
 
-    @Test func menuBarRowsCarryPerWindowLimitsForSuccessfulQueries() async {
+    @Test func menuBarRowsCarryPerWindowRemainingLimitsForSuccessfulQueries() async {
         let quota = SubscriptionQuota(
             tool: "claude_code",
             credentialStatus: .valid,
@@ -1125,7 +1157,7 @@ extension BorderCollieTests {
 
         let limits = await viewModel.rows.first?.limits ?? []
         #expect(limits.map(\.title) == ["5h", "7d"])
-        #expect(limits.map(\.percentageText) == ["48%", "64%"])
+        #expect(limits.map(\.percentageText) == ["52%", "36%"])
     }
 
     @Test func menuBarRowsHaveNoLimitsWhenQueryFails() async {

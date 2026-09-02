@@ -125,10 +125,10 @@ are prepared for the app UI to launch.
 - Keep manual Refresh in the top toolbar, refreshing every tracker; a tracker in
   a failure state also offers an inline Refresh beside its message.
 - Keep manual refresh in the menu-bar popup as an icon-only button.
-- Show usage consumed in percentages and progress bars.
-- The menu-bar popup shows all tracked agents in compact used format:
-  `Codex 5h: 20% | 7d: 10%`, `Cursor Auto: 5% | API: 40%`, and
-  `Claude Code 5h: 48% | 7d: 64%`.
+- Show usage remaining in percentages and progress bars.
+- The menu-bar popup shows all tracked agents in compact remaining format:
+  `Codex 5h: 80% | 7d: 90%`, `Cursor Auto: 95% | API: 60%`, and
+  `Claude Code 5h: 52% | 7d: 36%`.
 - Use native SwiftUI `ProgressView` bars, tinted by `Double.quotaTint` so a bar
   near its limit reads differently from an idle one. Colour only reinforces the
   percentage text; it is never the sole channel.
@@ -256,10 +256,11 @@ are prepared for the app UI to launch.
 
 ### Symptom: usage percentage appears inverted
 
-- Root cause: display code subtracts a provider-reported used percentage from
-  100, turning it into remaining percentage.
+- Root cause: display code renders provider-reported used percentage directly,
+  turning a remaining-quota product value into consumed usage.
 - Fix: store provider value as `QuotaTier.utilization`, clamp it to `0...100`,
-  and render it directly.
+  and derive the displayed remaining value as `100 - used` in shared display
+  policy.
 - Prevention: document each provider's percentage semantics before normalizing.
 
 ### Symptom: "Updated" time changes every second
@@ -297,14 +298,15 @@ are prepared for the app UI to launch.
 - Rationale: one normalized model keeps UI consistent and makes future tracker
   additions testable.
 
-### Decision: show provider-reported used percentage
+### Decision: derive remaining percentage in display policy
 
 - Context: Codex and Cursor report used percentage, and Claude reports
   utilization with the same meaning.
-- Alternatives considered: convert used percentage to remaining percentage in
-  the display layer.
-- Rationale: rendering the normalized utilization directly keeps bars and
-  labels aligned with provider semantics.
+- Alternatives considered: render the provider-reported used percentage
+  directly in the live-quota surfaces.
+- Rationale: retaining provider semantics in `QuotaTier.utilization` while
+  deriving remaining percentage in shared display policy keeps bars and labels
+  aligned with the product contract.
 
 ### Decision: fixed 30-second auto refresh
 
