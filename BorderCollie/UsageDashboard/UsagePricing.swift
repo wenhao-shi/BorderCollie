@@ -6,6 +6,7 @@ enum UsageModelCatalog {
         anthropicAlias("claude-opus-5", "claude-opus-5", from: "2026-07-24T00:00:00Z"),
         anthropicAlias("claude-sonnet-5", "claude-sonnet-5", from: "2026-06-30T00:00:00Z"),
         anthropicAlias("claude-haiku-4-5-20251001", "claude-haiku-4.5", from: "2025-10-15T00:00:00Z"),
+        openAIAlias("gpt-6-astra", "gpt-6-astra", from: "2026-09-03T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-6-astra"),
         openAIAlias("gpt-5.6", "gpt-5.6-sol", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
         openAIAlias("gpt-5.6-sol", "gpt-5.6-sol", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
         openAIAlias("gpt-5.6-terra", "gpt-5.6-terra", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-terra"),
@@ -56,7 +57,7 @@ enum UsageModelCatalog {
 }
 
 enum UsagePricingCatalog {
-    static let retrievedAtMilliseconds = iso("2026-08-15T00:00:00Z")
+    static let retrievedAtMilliseconds = iso("2026-09-06T00:00:00Z")
     static let anthropicSource = "https://platform.claude.com/docs/en/about-claude/pricing"
 
     static let rules: [UsagePricingRule] = [
@@ -64,6 +65,7 @@ enum UsagePricingCatalog {
         anthropic("anthropic-opus-5-2026", "claude-opus-5", from: "2026-07-24T00:00:00Z", input: 5_000, write5m: 6_250, write1h: 10_000, read: 500, output: 25_000),
         anthropic("anthropic-sonnet-5-standard", "claude-sonnet-5", from: "2026-06-30T00:00:00Z", input: 2_000, write5m: 2_500, write1h: 4_000, read: 200, output: 10_000),
         anthropic("anthropic-haiku-4.5", "claude-haiku-4.5", from: "2025-10-15T00:00:00Z", input: 1_000, write5m: 1_250, write1h: 2_000, read: 100, output: 5_000),
+        openAI("openai-gpt-6-astra", "gpt-6-astra", from: "2026-09-03T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-6-astra", input: 10_000, write: 12_500, read: 1_000, output: 50_000),
         openAI("openai-gpt-5.6-sol", "gpt-5.6-sol", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol", input: 5_000, write: 6_250, read: 500, output: 30_000),
         openAI("openai-gpt-5.6-terra-launch", "gpt-5.6-terra", from: "2026-07-09T00:00:00Z", until: "2026-07-30T00:00:00Z", source: "https://openai.com/index/gpt-5-6/", input: 2_500, write: 3_125, read: 250, output: 15_000),
         openAI("openai-gpt-5.6-terra", "gpt-5.6-terra", from: "2026-07-30T00:00:00Z", source: "https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/", input: 2_000, write: 2_500, read: 200, output: 12_000),

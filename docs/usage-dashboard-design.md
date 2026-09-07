@@ -459,6 +459,7 @@ overwrite the source-reported cost or raw model ID.
 
 Official references used for the initial catalog design:
 
+- [OpenAI GPT-6 Astra model pricing](https://developers.openai.com/api/docs/models/gpt-6-astra)
 - [OpenAI GPT-5.6 Sol model pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 - [OpenAI GPT-5.6 Terra model pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 - [OpenAI GPT-5.6 Luna model pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna)

@@ -326,6 +326,35 @@ struct UsageDashboardTests {
 
         let long = try makeEvent(input: 273_000, cacheWrite: 0, cacheRead: 0, output: 1_000)
         #expect(engine.price(long) == .priced(costNanodollars: 2_775_000_000, ruleID: "openai-gpt-5.6-sol"))
+
+        #expect(UsageModelCatalog.canonicalModelID(
+            authority: .openAI,
+            rawModelID: "gpt-6-astra",
+            occurredAtMilliseconds: timestamp("2026-09-02T23:59:59Z")
+        ) == nil)
+        #expect(UsageModelCatalog.canonicalModelID(
+            authority: .openAI,
+            rawModelID: "gpt-6-astra",
+            occurredAtMilliseconds: timestamp("2026-09-03T00:00:00Z")
+        ) == "gpt-6-astra")
+
+        let astraBeforeLaunch = try makeEvent(
+            model: "gpt-6-astra", occurredAt: "2026-09-02T23:59:59Z",
+            input: 100, cacheWrite: 20, cacheRead: 30, output: 40
+        )
+        #expect(engine.price(astraBeforeLaunch) == .unavailable(.unknownModel))
+
+        let astra = try makeEvent(
+            model: "gpt-6-astra", occurredAt: "2026-09-03T00:00:00Z",
+            input: 100, cacheWrite: 20, cacheRead: 30, output: 40
+        )
+        #expect(engine.price(astra) == .priced(costNanodollars: 3_280_000, ruleID: "openai-gpt-6-astra"))
+
+        let astraLong = try makeEvent(
+            model: "gpt-6-astra", occurredAt: "2026-09-03T00:00:00Z",
+            input: 273_000, cacheWrite: 0, cacheRead: 0, output: 1_000
+        )
+        #expect(engine.price(astraLong) == .priced(costNanodollars: 5_535_000_000, ruleID: "openai-gpt-6-astra"))
     }
 
     @Test func aggregationReconcilesBucketsRatesCoverageAndFilters() throws {
