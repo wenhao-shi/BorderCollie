@@ -15,8 +15,8 @@ The dashboard answers a different question from the quota views:
 - The historical dashboard shows locally observed token activity and a
   counterfactual estimate of what that activity would cost at public API rates.
 
-Cursor is outside the dashboard because its local history has not been shown to
-provide complete accounting data. The existing Cursor quota view is unchanged.
+Cursor is outside the dashboard: its local history never provided complete
+accounting data, and its live quota tracker has since been removed.
 
 ## Product Decisions
 
@@ -441,6 +441,16 @@ the data needed to prove the modifier, such as a long-context threshold. If a
 required dimension is absent, the cost is unavailable or explicitly marked as
 assumption-based; it is not guessed silently.
 
+Current request-level modifiers:
+
+- OpenAI rules: prompts over 272K tokens pay 2x input/cache and 1.5x output.
+- Claude Haiku 5.5: prompts over 100K tokens (input + cache writes + cache
+  reads) pay 5x on every bucket, output included. Other Claude 4.6+ models are
+  priced flat across the 1M window.
+- Cache-read rates are not always 0.1x input: Fable/Mythos 5.1 and 5.2 are
+  0.025x, Opus 5.5 and Sonnet 5.5 are 0.05x. Copy each rate from the pricing
+  table rather than deriving it.
+
 ### Effective-Dated Catalog
 
 Each pricing rule includes:
@@ -523,7 +533,7 @@ native `NavigationSplitView` source-list appearance and stable selection model.
 Do not turn the dashboard into a separate window or modal flow.
 
 The sidebar groups its destinations into `History` (Usage, Evaluations) and
-`Live quota` (Codex, Cursor, Claude Code): they hold different data and refresh
+`Live quota` (Codex, Claude Code): they hold different data and refresh
 on different clocks, so they are labelled rather than run together in one flat
 list.
 

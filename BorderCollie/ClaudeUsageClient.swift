@@ -255,7 +255,9 @@ struct ClaudeUsageClient: Sendable {
         // array is authoritative, so let it overwrite any flat `seven_day_<model>`
         // key for the same model.
         var modelTiers: [String: QuotaTier] = [:]
-        for (model, window) in usageResponse.modelWindows {
+        for (rawModel, window) in usageResponse.modelWindows {
+            let model = ClaudeUsageLimitKind.normalizedModelName(rawModel)
+            guard !model.isEmpty else { continue }
             modelTiers[model] = QuotaTier(
                 name: ClaudeUsageLimitKind.modelWeekTierName(model: model),
                 utilization: window.utilization,
@@ -265,9 +267,8 @@ struct ClaudeUsageClient: Sendable {
         for limit in usageResponse.limits {
             guard limit.kind == "weekly_scoped", limit.isActive != false,
                   let percent = limit.percent,
-                  let model = (limit.scope?.model?.displayName ?? limit.scope?.model?.id)?
-                      .lowercased()
-                      .replacingOccurrences(of: " ", with: "_"),
+                  let rawModel = limit.scope?.model?.displayName ?? limit.scope?.model?.id,
+                  case let model = ClaudeUsageLimitKind.normalizedModelName(rawModel),
                   !model.isEmpty
             else {
                 continue

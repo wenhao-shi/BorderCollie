@@ -2,9 +2,17 @@ import Foundation
 
 enum UsageModelCatalog {
     static let aliases: [UsageModelAlias] = [
+        anthropicAlias("claude-fable-5-2", "claude-fable-5-2", from: "2026-11-09T00:00:00Z"),
+        anthropicAlias("claude-mythos-5-2", "claude-mythos-5-2", from: "2026-11-09T00:00:00Z"),
+        anthropicAlias("claude-fable-5-1", "claude-fable-5-1", from: "2026-09-01T00:00:00Z"),
+        anthropicAlias("claude-mythos-5-1", "claude-mythos-5-1", from: "2026-09-01T00:00:00Z"),
         anthropicAlias("claude-fable-5", "claude-fable-5", from: "2026-06-09T00:00:00Z"),
+        anthropicAlias("claude-mythos-5", "claude-mythos-5", from: "2026-06-09T00:00:00Z"),
+        anthropicAlias("claude-opus-5-5", "claude-opus-5-5", from: "2026-09-22T00:00:00Z"),
         anthropicAlias("claude-opus-5", "claude-opus-5", from: "2026-07-24T00:00:00Z"),
+        anthropicAlias("claude-sonnet-5-5", "claude-sonnet-5-5", from: "2026-09-28T00:00:00Z"),
         anthropicAlias("claude-sonnet-5", "claude-sonnet-5", from: "2026-06-30T00:00:00Z"),
+        anthropicAlias("claude-haiku-5-5", "claude-haiku-5-5", from: "2026-10-07T00:00:00Z"),
         anthropicAlias("claude-haiku-4-5-20251001", "claude-haiku-4.5", from: "2025-10-15T00:00:00Z"),
         openAIAlias("gpt-6-astra", "gpt-6-astra", from: "2026-09-03T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-6-astra"),
         openAIAlias("gpt-5.6", "gpt-5.6-sol", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol"),
@@ -58,12 +66,26 @@ enum UsageModelCatalog {
 
 enum UsagePricingCatalog {
     static let retrievedAtMilliseconds = iso("2026-09-06T00:00:00Z")
+    static let anthropicRetrievedAtMilliseconds = iso("2026-11-11T00:00:00Z")
     static let anthropicSource = "https://platform.claude.com/docs/en/about-claude/pricing"
 
     static let rules: [UsagePricingRule] = [
+        // Effective-from dates are launch dates: each model's retirement
+        // commitment on the deprecations page is exactly one year after launch.
+        // Fable/Mythos 5.1+ cache hits are 0.025x input; Opus/Sonnet 5.5 are 0.05x.
+        anthropic("anthropic-fable-5-2", "claude-fable-5-2", from: "2026-11-09T00:00:00Z", input: 8_000, write5m: 10_000, write1h: 16_000, read: 200, output: 40_000),
+        anthropic("anthropic-mythos-5-2", "claude-mythos-5-2", from: "2026-11-09T00:00:00Z", input: 8_000, write5m: 10_000, write1h: 16_000, read: 200, output: 40_000),
+        anthropic("anthropic-fable-5-1", "claude-fable-5-1", from: "2026-09-01T00:00:00Z", input: 10_000, write5m: 12_500, write1h: 20_000, read: 250, output: 50_000),
+        anthropic("anthropic-mythos-5-1", "claude-mythos-5-1", from: "2026-09-01T00:00:00Z", input: 10_000, write5m: 12_500, write1h: 20_000, read: 250, output: 50_000),
         anthropic("anthropic-fable-5-2026", "claude-fable-5", from: "2026-06-09T00:00:00Z", input: 10_000, write5m: 12_500, write1h: 20_000, read: 1_000, output: 50_000),
+        anthropic("anthropic-mythos-5", "claude-mythos-5", from: "2026-06-09T00:00:00Z", input: 10_000, write5m: 12_500, write1h: 20_000, read: 1_000, output: 50_000),
+        anthropic("anthropic-opus-5-5", "claude-opus-5-5", from: "2026-09-22T00:00:00Z", input: 4_000, write5m: 5_000, write1h: 8_000, read: 200, output: 20_000),
         anthropic("anthropic-opus-5-2026", "claude-opus-5", from: "2026-07-24T00:00:00Z", input: 5_000, write5m: 6_250, write1h: 10_000, read: 500, output: 25_000),
+        anthropic("anthropic-sonnet-5-5", "claude-sonnet-5-5", from: "2026-09-28T00:00:00Z", input: 2_000, write5m: 2_500, write1h: 4_000, read: 100, output: 10_000),
         anthropic("anthropic-sonnet-5-standard", "claude-sonnet-5", from: "2026-06-30T00:00:00Z", input: 2_000, write5m: 2_500, write1h: 4_000, read: 200, output: 10_000),
+        // Haiku 5.5 is priced by prompt length: a request whose prompt (input +
+        // cache writes + cache reads) is over 100K tokens pays 5x on every bucket.
+        anthropic("anthropic-haiku-5-5", "claude-haiku-5-5", from: "2026-10-07T00:00:00Z", input: 100, write5m: 125, write1h: 200, read: 10, output: 500, longContextThreshold: 100_000, longContextMultiplier: 5),
         anthropic("anthropic-haiku-4.5", "claude-haiku-4.5", from: "2025-10-15T00:00:00Z", input: 1_000, write5m: 1_250, write1h: 2_000, read: 100, output: 5_000),
         openAI("openai-gpt-6-astra", "gpt-6-astra", from: "2026-09-03T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-6-astra", input: 10_000, write: 12_500, read: 1_000, output: 50_000),
         openAI("openai-gpt-5.6-sol", "gpt-5.6-sol", from: "2026-07-09T00:00:00Z", source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol", input: 5_000, write: 6_250, read: 500, output: 30_000),
@@ -83,7 +105,9 @@ enum UsagePricingCatalog {
         write5m: Int64,
         write1h: Int64,
         read: Int64,
-        output: Int64
+        output: Int64,
+        longContextThreshold: Int64? = nil,
+        longContextMultiplier: Int64 = 1
     ) -> UsagePricingRule {
         UsagePricingRule(
             id: id, authority: .anthropic, canonicalModelID: model,
@@ -91,10 +115,10 @@ enum UsagePricingCatalog {
             inputRateNanodollarsPerToken: input, cacheWriteRateNanodollarsPerToken: nil,
             cacheWrite5mRateNanodollarsPerToken: write5m, cacheWrite1hRateNanodollarsPerToken: write1h,
             cacheReadRateNanodollarsPerToken: read, outputRateNanodollarsPerToken: output,
-            longContextThresholdTokens: nil,
-            longContextInputMultiplierNumerator: 1, longContextInputMultiplierDenominator: 1,
-            longContextOutputMultiplierNumerator: 1, longContextOutputMultiplierDenominator: 1,
-            sourceURL: anthropicSource, retrievedAtMilliseconds: retrievedAtMilliseconds
+            longContextThresholdTokens: longContextThreshold,
+            longContextInputMultiplierNumerator: longContextMultiplier, longContextInputMultiplierDenominator: 1,
+            longContextOutputMultiplierNumerator: longContextMultiplier, longContextOutputMultiplierDenominator: 1,
+            sourceURL: anthropicSource, retrievedAtMilliseconds: anthropicRetrievedAtMilliseconds
         )
     }
 

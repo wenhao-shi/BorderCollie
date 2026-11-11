@@ -71,14 +71,13 @@ one visual scale with the window.
 
 Each row contains:
 
-- Agent name, such as `Codex`, `Cursor`, or `Claude Code`.
+- Agent name, such as `Codex` or `Claude Code`.
 - Compact used-usage summary.
 
 Rows are ordered by product priority:
 
 1. Codex
-2. Cursor
-3. Claude Code
+2. Claude Code
 
 ## Compact Text Contract
 
@@ -90,16 +89,11 @@ Codex:
 5h: 80% | 7d: 90%
 ```
 
-Cursor:
+Claude Code (`Fable` is always present; other model-scoped weekly windows
+follow when the API reports them):
 
 ```text
-Auto: 95% | API: 60%
-```
-
-Claude Code:
-
-```text
-5h: 52% | 7d: 36%
+5h: 52% | 7d: 36% | Fable: 70%
 ```
 
 Percentages are usage remaining. Provider-reported used percentage remains in
@@ -115,7 +109,7 @@ while visible.
 
 Claude Code is still included in that 30-second loop, but its OAuth usage
 client reuses a process-wide cached response for at least 60 seconds and
-backs off for at least five minutes after HTTP 429. Codex and Cursor continue
+backs off for at least five minutes after HTTP 429. Codex continues
 to query on the normal 30-second cadence.
 
 `MenuBarUsageViewModel` owns menu-bar refresh behavior:
@@ -163,7 +157,6 @@ When adding a future tracker:
 Menu-bar behavior should be covered without live network calls:
 
 - Exact Codex compact text.
-- Exact Cursor compact text.
 - Exact Claude Code compact text.
 - Missing compact tiers.
 - Rounded and clamped percentages.

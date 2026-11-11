@@ -3,6 +3,9 @@ import Foundation
 enum ClaudeUsageLimitKind: String, CaseIterable, Identifiable, Sendable {
     case fiveHour = "five_hour"
     case week = "seven_day"
+    /// Fable's model-scoped weekly window. Pinned like the account-wide windows
+    /// so a Fable plan always shows it — as `--` when the API omits it.
+    case fableWeek = "seven_day_fable"
 
     var id: String { rawValue }
 
@@ -12,6 +15,8 @@ enum ClaudeUsageLimitKind: String, CaseIterable, Identifiable, Sendable {
             "5h"
         case .week:
             "7d"
+        case .fableWeek:
+            "7d · Fable"
         }
     }
 
@@ -21,7 +26,25 @@ enum ClaudeUsageLimitKind: String, CaseIterable, Identifiable, Sendable {
             "5h"
         case .week:
             "7d"
+        case .fableWeek:
+            "Fable"
         }
+    }
+
+    /// Model families the usage API scopes weekly windows to. A raw model name
+    /// containing one of these collapses to it, so `seven_day_fable`, a
+    /// `limits` entry for `claude-fable-5-2`, and one displayed as
+    /// "Claude Fable 5.2" all land on the same `fable` tier.
+    private static let modelFamilies: Set<String> = ["fable", "mythos", "opus", "sonnet", "haiku"]
+
+    static func normalizedModelName(_ raw: String) -> String {
+        let words = raw.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "." })
+            .map(String.init)
+        if let family = words.first(where: modelFamilies.contains) {
+            return family
+        }
+        return words.joined(separator: "_")
     }
 
     /// Tier name for a model-scoped weekly window, e.g. `seven_day_opus`.
@@ -49,7 +72,7 @@ enum ClaudeUsageLimitKind: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum ClaudeUsageLimitDisplay {
-    /// The two account-wide windows are always shown — a missing one renders as
+    /// The account-wide windows and Fable's weekly window are always shown — a missing one renders as
     /// `--` rather than silently disappearing — followed by whatever
     /// model-scoped weekly windows the account actually has.
     static func usageLimits(from quota: SubscriptionQuota) -> [UsageLimitDisplay] {
@@ -85,9 +108,12 @@ enum ClaudeUsageLimitDisplay {
         return (fixed + models).joined(separator: " | ")
     }
 
+    /// Model-scoped weekly windows not already pinned as a fixed kind.
     private static func modelTiers(in quota: SubscriptionQuota) -> [(tier: QuotaTier, model: String)] {
-        quota.tiers.compactMap { tier in
-            ClaudeUsageLimitKind.modelName(fromTierName: tier.name).map { (tier, $0) }
+        let fixedNames = Set(ClaudeUsageLimitKind.allCases.map(\.rawValue))
+        return quota.tiers.compactMap { tier in
+            guard !fixedNames.contains(tier.name) else { return nil }
+            return ClaudeUsageLimitKind.modelName(fromTierName: tier.name).map { (tier, $0) }
         }
     }
 }

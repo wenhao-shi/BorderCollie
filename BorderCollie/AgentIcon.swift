@@ -2,12 +2,11 @@ import SwiftUI
 
 /// Brand icon for a tracked agent.
 ///
-/// Codex and Cursor ship as template images and take the surrounding foreground
-/// style, so they stay legible in both appearances. Claude's icon carries its
+/// Codex ships as a template image and takes the surrounding foreground
+/// style, so it stays legible in both appearances. Claude's icon carries its
 /// own brand fill and renders as authored.
 enum AgentIcon: String, Sendable {
     case codex
-    case cursor
     case claudeCode
     case openCode
     case pi
@@ -16,8 +15,6 @@ enum AgentIcon: String, Sendable {
         switch self {
         case .codex:
             .agentIconCodex
-        case .cursor:
-            .agentIconCursor
         case .claudeCode:
             .agentIconClaude
         case .openCode:

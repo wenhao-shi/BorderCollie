@@ -286,6 +286,52 @@ struct UsageDashboardTests {
         ])
     }
 
+    @Test func pricingCoversNewClaudeModelsAndHaikuPromptLengthTier() throws {
+        let engine = UsagePricingEngine()
+
+        let opus = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-opus-5-5",
+            occurredAt: "2026-10-01T12:00:00Z", input: 100, cacheWrite: 20,
+            cacheRead: 30, output: 40, write5m: 10, write1h: 10
+        )
+        #expect(engine.price(opus) == .priced(costNanodollars: 1_336_000, ruleID: "anthropic-opus-5-5"))
+
+        let fable = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-fable-5-2",
+            occurredAt: "2026-11-10T12:00:00Z", input: 100, cacheRead: 1_000, output: 10
+        )
+        #expect(engine.price(fable) == .priced(costNanodollars: 1_400_000, ruleID: "anthropic-fable-5-2"))
+
+        let sonnet = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-sonnet-5-5",
+            occurredAt: "2026-10-01T12:00:00Z", input: 100, cacheRead: 100, output: 10
+        )
+        #expect(engine.price(sonnet) == .priced(costNanodollars: 310_000, ruleID: "anthropic-sonnet-5-5"))
+
+        let haikuAtThreshold = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-haiku-5-5",
+            occurredAt: "2026-10-08T12:00:00Z", input: 50_000, cacheRead: 50_000, output: 100
+        )
+        #expect(engine.price(haikuAtThreshold) == .priced(costNanodollars: 5_550_000, ruleID: "anthropic-haiku-5-5"))
+
+        let haikuOverThreshold = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-haiku-5-5",
+            occurredAt: "2026-10-08T12:00:00Z", input: 50_001, cacheRead: 50_000, output: 100
+        )
+        #expect(engine.price(haikuOverThreshold) == .priced(costNanodollars: 27_750_500, ruleID: "anthropic-haiku-5-5"))
+
+        let beforeLaunch = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-opus-5-5",
+            occurredAt: "2026-09-21T23:59:59Z"
+        )
+        #expect(engine.price(beforeLaunch) == .unavailable(.unknownModel))
+
+        #expect(UsageModelCatalog.canonicalModelID(
+            authority: .anthropic, rawModelID: "claude-fable-5-2",
+            occurredAtMilliseconds: timestamp("2026-11-10T00:00:00Z")
+        ) == "claude-fable-5-2")
+    }
+
     @Test func pricingUsesEffectiveRuleCacheClassesAndLongContextModifier() throws {
         var claude = try makeEvent(
             agent: .claudeCode, authority: .anthropic, model: "claude-sonnet-5",

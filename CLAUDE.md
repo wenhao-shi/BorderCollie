@@ -45,7 +45,7 @@ They share the SwiftUI shell (`ContentView.swift` sidebar) and nothing else. Do 
 UsageTrackerView / AgentUsageMenuBarView
   → UsageTrackerViewModel / MenuBarUsageViewModel   (@MainActor, isLoading guard)
   → UsageQuotaQuery.query(service:timeout:)         (20s cap, UsageQuotaQuery.swift:10)
-  → {Codex,Cursor,Claude}QuotaService
+  → {Codex,Claude}QuotaService
   → *CredentialResolver + *UsageClient              → SubscriptionQuota
 ```
 
@@ -80,4 +80,4 @@ Everything provider-touching or disk-touching is injectable; use these rather th
 
 ## Project constraints
 
-`SWIFT_VERSION = 5.0` (Swift 5 language mode despite the actor/`Sendable` style), `MACOSX_DEPLOYMENT_TARGET = 26.5`, `ENABLE_APP_SANDBOX = NO` on the app target — trackers need Keychain, `~/.codex/auth.json`, Cursor's `state.vscdb`, and network access. There is no shared `.xcscheme` in `xcshareddata`; `xcodebuild` autocreates the `BorderCollie` scheme.
+`SWIFT_VERSION = 5.0` (Swift 5 language mode despite the actor/`Sendable` style), `MACOSX_DEPLOYMENT_TARGET = 26.5`, `ENABLE_APP_SANDBOX = NO` on the app target — trackers need Keychain, `~/.codex/auth.json`, and network access. There is no shared `.xcscheme` in `xcshareddata`; `xcodebuild` autocreates the `BorderCollie` scheme.

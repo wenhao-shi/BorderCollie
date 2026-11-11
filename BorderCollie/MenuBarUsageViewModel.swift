@@ -54,17 +54,6 @@ struct MenuBarUsageAgent: Identifiable, Sendable {
         )
     }
 
-    static func cursor(service: any UsageTrackingService = CursorQuotaService.live) -> MenuBarUsageAgent {
-        MenuBarUsageAgent(
-            id: "cursor",
-            title: "Cursor",
-            icon: .cursor,
-            service: service,
-            compactSummary: CursorUsageLimitDisplay.compactSummary,
-            usageLimits: CursorUsageLimitDisplay.usageLimits
-        )
-    }
-
     static func claudeCode(service: any UsageTrackingService = ClaudeQuotaService.live) -> MenuBarUsageAgent {
         MenuBarUsageAgent(
             id: "claude_code",
@@ -88,7 +77,6 @@ final class MenuBarUsageViewModel: ObservableObject {
     init(
         agents: [MenuBarUsageAgent] = [
             .codex(),
-            .cursor(),
             .claudeCode(),
         ],
         initialRows: [MenuBarUsageRow]? = nil
@@ -221,12 +209,10 @@ extension MenuBarUsageViewModel {
         MenuBarUsageViewModel(
             agents: [
                 .codex(service: StaticUsageTrackingService(toolID: "codex", quota: .previewMenuBarCodexUsage)),
-                .cursor(service: StaticUsageTrackingService(toolID: "cursor", quota: .previewMenuBarCursorUsage)),
                 .claudeCode(service: StaticUsageTrackingService(toolID: "claude_code", quota: .previewMenuBarClaudeUsage)),
             ],
             initialRows: [
                 previewRow(id: "codex", title: "Codex", icon: .codex, quota: .previewMenuBarCodexUsage, limits: CodexUsageLimitDisplay.usageLimits),
-                previewRow(id: "cursor", title: "Cursor", icon: .cursor, quota: .previewMenuBarCursorUsage, limits: CursorUsageLimitDisplay.usageLimits),
                 previewRow(id: "claude_code", title: "Claude Code", icon: .claudeCode, quota: .previewMenuBarClaudeUsage, limits: ClaudeUsageLimitDisplay.usageLimits),
             ]
         )
@@ -272,22 +258,6 @@ private extension SubscriptionQuota {
         )
     }
 
-    static var previewMenuBarCursorUsage: SubscriptionQuota {
-        SubscriptionQuota(
-            tool: "cursor",
-            credentialStatus: .valid,
-            credentialMessage: nil,
-            success: true,
-            tiers: [
-                QuotaTier(name: CursorUsageLimitKind.autoComposer.rawValue, utilization: 5, resetsAt: previewResetsAt(inHours: 320)),
-                QuotaTier(name: CursorUsageLimitKind.api.rawValue, utilization: 40, resetsAt: previewResetsAt(inHours: 320)),
-            ],
-            extraUsage: nil,
-            error: nil,
-            queriedAt: Date().millisecondsSince1970
-        )
-    }
-
     static var previewMenuBarClaudeUsage: SubscriptionQuota {
         SubscriptionQuota(
             tool: "claude_code",
@@ -297,6 +267,7 @@ private extension SubscriptionQuota {
             tiers: [
                 QuotaTier(name: ClaudeUsageLimitKind.fiveHour.rawValue, utilization: 48, resetsAt: previewResetsAt(inHours: 4.5)),
                 QuotaTier(name: ClaudeUsageLimitKind.week.rawValue, utilization: 64, resetsAt: previewResetsAt(inHours: 158)),
+                QuotaTier(name: ClaudeUsageLimitKind.fableWeek.rawValue, utilization: 30, resetsAt: previewResetsAt(inHours: 158)),
             ],
             extraUsage: nil,
             error: nil,
