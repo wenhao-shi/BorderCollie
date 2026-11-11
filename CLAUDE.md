@@ -45,7 +45,7 @@ They share the SwiftUI shell (`ContentView.swift` sidebar) and nothing else. Do 
 UsageTrackerView / AgentUsageMenuBarView
   → UsageTrackerViewModel / MenuBarUsageViewModel   (@MainActor, isLoading guard)
   → UsageQuotaQuery.query(service:timeout:)         (20s cap, UsageQuotaQuery.swift:10)
-  → {Codex,Cursor,Claude}QuotaService
+  → {Codex,Claude}QuotaService
   → *CredentialResolver + *UsageClient              → SubscriptionQuota
 ```
 
@@ -54,8 +54,8 @@ Every provider normalizes to `SubscriptionQuota` / `QuotaTier.utilization` (prov
 **2. Historical usage analytics** (`BorderCollie/UsageDashboard/`, imported, persisted, local SQLite)
 
 ```
-{ClaudeCode,Codex,OpenCode,Pi}UsageImporter   incremental, checkpointed by byte offset
-  → UsageAnalyticsStore                        actor over SQLite, schemaVersion 3
+{ClaudeCode,Codex}UsageImporter   incremental, checkpointed by byte offset
+  → UsageAnalyticsStore                        actor over SQLite, schemaVersion 4
   → UsageAnalyticsBackend.refresh()            import → price everything → aggregate
   → UsageAggregator                            → UsageAggregate
   → UsageDashboardModel / EvaluationRunsModel  @MainActor
@@ -75,9 +75,9 @@ Everything provider-touching or disk-touching is injectable; use these rather th
 - Network: `UsageHTTPClient` protocol (`UsageTrackingService.swift:9`) — pass a stub returning `(Data, HTTPURLResponse)`.
 - Store: `UsageAnalyticsStore(databaseURL:)` — point at a temp dir; never let a test open the default path.
 - Pipeline: `UsageAnalyticsBackend(importers:)` — inject synthetic importers.
-- Importer source roots are env-overridable (`UsageImporters.swift:4-27`), which is how you point a real importer at fixtures: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_DATA_HOME` (OpenCode), `PI_CODING_AGENT_DIR`.
+- Importer source roots are env-overridable (`UsageSourceLocations` in `UsageImporters.swift`), which is how you point a real importer at fixtures: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`.
 - Previews: use `PreviewProvider`, not the `#Preview` macro (the macro plugin server fails under the sandboxed CLI build). Inject sample quota/aggregates and `runsAutoRefresh: false`; a preview must never read credentials, hit the network, or open the analytics store.
 
 ## Project constraints
 
-`SWIFT_VERSION = 5.0` (Swift 5 language mode despite the actor/`Sendable` style), `MACOSX_DEPLOYMENT_TARGET = 26.5`, `ENABLE_APP_SANDBOX = NO` on the app target — trackers need Keychain, `~/.codex/auth.json`, Cursor's `state.vscdb`, and network access. There is no shared `.xcscheme` in `xcshareddata`; `xcodebuild` autocreates the `BorderCollie` scheme.
+`SWIFT_VERSION = 5.0` (Swift 5 language mode despite the actor/`Sendable` style), `MACOSX_DEPLOYMENT_TARGET = 26.5`, `ENABLE_APP_SANDBOX = NO` on the app target — trackers need Keychain, `~/.codex/auth.json`, and network access. There is no shared `.xcscheme` in `xcshareddata`; `xcodebuild` autocreates the `BorderCollie` scheme.

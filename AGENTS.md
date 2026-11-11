@@ -40,12 +40,6 @@
   parsing.
 - `BorderCollie/CodexUsageClient.swift`: Codex quota HTTP client and response
   normalization.
-- `BorderCollie/CursorQuotaService.swift`: coordinates Cursor credentials and
-  quota client.
-- `BorderCollie/CursorCredentialResolver.swift`: Cursor IDE auth-token
-  discovery from Cursor's local `state.vscdb`.
-- `BorderCollie/CursorUsageClient.swift`: Cursor current-period usage client
-  and response normalization.
 - `BorderCollie/ClaudeQuotaService.swift`: coordinates Claude Code credentials
   and quota client.
 - `BorderCollie/ClaudeCredentialResolver.swift`: Claude Code OAuth credential
@@ -57,15 +51,15 @@
   formatting helpers.
 - `BorderCollie/CodexUsageDisplay.swift`: display-policy helpers for usage
   rows.
-- `BorderCollie/CursorUsageDisplay.swift`: Cursor monthly usage row labels.
 - `BorderCollie/ClaudeUsageDisplay.swift`: Claude Code session/weekly usage
-  row labels.
+  row labels, the pinned Fable weekly window, and model-name normalization for
+  model-scoped weekly windows.
 - `BorderCollie/UsageDashboard/UsageAnalyticsModels.swift`: canonical historical
   token, pricing, coverage, and aggregate models.
 - `BorderCollie/UsageDashboard/UsageAnalyticsStore.swift`: actor-isolated local
   SQLite schema, transactions, checkpoints, and range reads.
 - `BorderCollie/UsageDashboard/UsageImporters.swift`: incremental Claude Code,
-  Codex, OpenCode, and Pi history importers.
+  and Codex history importers.
 - `BorderCollie/UsageDashboard/UsagePricing.swift`: model aliases and
   effective-dated official token pricing.
 - `BorderCollie/UsageDashboard/UsageAnalyticsBackend.swift`: import, repricing,
@@ -113,7 +107,7 @@ are prepared for the app UI to launch.
 ## Current Usage Tracker Standard
 
 - Every tracked provider is a section on the one `Live quota` page, in order
-  Codex, Cursor, Claude Code. Do not give a tracker its own sidebar destination.
+  Codex, Claude Code. Do not give a tracker its own sidebar destination.
 - A user can disable each provider from the Trackers menu in the Live quota toolbar. A disabled provider is hidden from both Live quota and the menu-bar popup, and it must not make quota requests.
 - Each section keeps its own view model, cadence, and failure state; one
   provider failing must never blank another.
@@ -127,8 +121,10 @@ are prepared for the app UI to launch.
 - Keep manual refresh in the menu-bar popup as an icon-only button.
 - Show usage remaining in percentages and progress bars.
 - The menu-bar popup shows all tracked agents in compact remaining format:
-  `Codex 5h: 80% | 7d: 90%`, `Cursor Auto: 95% | API: 60%`, and
-  `Claude Code 5h: 52% | 7d: 36%`.
+  `Codex 5h: 80% | 7d: 90%` and
+  `Claude Code 5h: 52% | 7d: 36% | Fable: 70%`.
+- Claude Code always lists `5h`, `7d`, and `7d · Fable` (missing → `--`), then
+  any other model-scoped weekly windows the API reports.
 - Use native SwiftUI `ProgressView` bars, tinted by `Double.quotaTint` so a bar
   near its limit reads differently from an idle one. Colour only reinforces the
   percentage text; it is never the sole channel.
@@ -167,7 +163,8 @@ are prepared for the app UI to launch.
 ## Historical Usage Backend Standard
 
 - Keep historical analytics separate from `SubscriptionQuota` and quota polling.
-- Track Claude Code, Codex, OpenCode, and Pi; Cursor is not a historical source.
+- Track Claude Code and Codex only; Cursor, OpenCode, and Pi are not
+  historical sources. Schema v4 purges any stored OpenCode/Pi rows.
 - Preserve disjoint `in`, `cache-write`, `cache-read`, and `out` buckets;
   reasoning is a subset of `out`.
 - Store partial events but exclude them from complete-token and cost totals.
@@ -186,7 +183,7 @@ are prepared for the app UI to launch.
   session key; they do not include subscription-quota utilization.
 - Active time spans human submission through terminal agent completion,
   including tools and waits but excluding the following human idle gap.
-- Codex/OpenCode timing is exact from explicit source markers; Claude Code/Pi
+- Codex timing is exact from explicit source markers; Claude Code
   timing is inferred from message boundaries and must stay labeled as inferred.
 - Merge overlapping intervals within each session before adding Agent time;
   union all selected-session intervals for Effective wall time.
@@ -272,21 +269,33 @@ are prepared for the app UI to launch.
 
 ### Symptom: credential lookup fails after re-enabling sandbox
 
-- Root cause: sandbox restrictions block user auth files, local Cursor state,
-  Keychain/sqlite subprocesses, or network access.
+- Root cause: sandbox restrictions block user auth files, Keychain
+  subprocesses, or network access.
 - Fix: keep sandbox disabled or add an explicit entitlement strategy.
-- Prevention: retest Keychain, `~/.codex/auth.json`, Cursor `state.vscdb`,
+- Prevention: retest Keychain, `~/.codex/auth.json`,
   Claude Code Keychain/`~/.claude/.credentials.json`, and remote usage calls
   when changing signing or sandbox settings.
 
-### Symptom: Cursor tracker shows missing credentials while Cursor is signed in
+### Symptom: Claude Code `7d · Fable` shows `--` on a Fable plan
 
-- Root cause: Cursor moved or renamed its local auth database, or the
-  `cursorAuth/accessToken` key is absent.
-- Fix: inspect `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
-  and update `CursorCredentialResolver` if Cursor changed storage layout.
-- Prevention: keep Cursor credential lookup isolated and covered by resolver
-  tests.
+- Root cause: the live response reports Fable only in `limits` (flat
+  `seven_day_<model>` keys are `null`), and that entry carries
+  `is_active: false`. `is_active` marks the window currently closest to
+  binding (`weekly_all` is `false` too), not whether the limit exists.
+- Fix: never filter `limits` entries on `is_active`.
+- Prevention: `claudeUsageClientKeepsNonBindingScopedWindows` pins the captured
+  response shape.
+
+### Symptom: Claude Code shows two Fable (or Opus/Sonnet) weekly rows
+
+- Root cause: the usage API names the same model-scoped window differently in
+  the flat `seven_day_<model>` keys and the structured `limits` array (e.g.
+  `fable` vs `Claude Fable 5.2` / `claude-fable-5-2`).
+- Fix: both paths go through `ClaudeUsageLimitKind.normalizedModelName`, which
+  collapses any name containing a known family (`fable`, `mythos`, `opus`,
+  `sonnet`, `haiku`) to that family.
+- Prevention: add new model families to `modelFamilies` rather than special-
+  casing names in the client.
 
 ## Key Technical Decision Records
 
@@ -300,7 +309,7 @@ are prepared for the app UI to launch.
 
 ### Decision: derive remaining percentage in display policy
 
-- Context: Codex and Cursor report used percentage, and Claude reports
+- Context: Codex reports used percentage, and Claude reports
   utilization with the same meaning.
 - Alternatives considered: render the provider-reported used percentage
   directly in the live-quota surfaces.
@@ -322,7 +331,7 @@ are prepared for the app UI to launch.
   shared 30-second auto-refresh cadence.
 - Alternatives considered: keep a 300-second page cadence, slow every tracker,
   or keep 30 seconds and surface 429 errors.
-- Rationale: Codex and Cursor tolerate 30-second polling; Claude uses a
+- Rationale: Codex tolerates 30-second polling; Claude uses a
   60-second page cadence plus a process-wide cache and ≥300-second 429
   cooldown so the menu-bar loop does not burn the token budget.
 
@@ -359,7 +368,7 @@ are prepared for the app UI to launch.
 - Rationale: quota is read by comparison, so the providers belong on one page.
   Each section still owns a separate `UsageTrackerViewModel` and its own refresh
   loop — one provider signed out or rate-limited must never blank another, and
-  Claude's 60-second cadence must not drag Codex and Cursor to it. Per-provider
+  Claude's 60-second cadence must not drag Codex to it. Per-provider
   copy moved onto `LiveQuotaTracker`/`UsageTrackerCopy` beside the descriptor.
 
 ### Decision: add a SwiftUI `MenuBarExtra` companion
@@ -379,17 +388,36 @@ are prepared for the app UI to launch.
   same credential, timeout, and percentage-normalization behavior as the main
   tracker views.
 
-### Decision: Cursor uses IDE auth plus current-period dashboard usage
+### Decision: Cursor tracker removed
 
-- Context: Cursor CLI/agent exposes auth and model commands but not the monthly
-  split shown in the usage dashboard. Cursor IDE stores an access token in local
-  state, and `DashboardService/GetCurrentPeriodUsage` returns the monthly
-  `Auto + Composer` and `API` usage percentages plus billing-cycle reset.
-- Alternatives considered: scrape UI/dashboard HTML, call Cursor CLI, or require
-  a team Admin API key.
-- Rationale: the IDE-token dashboard call matches the personal Pro+ dashboard
-  with no extra setup; the Admin API is better for teams but not the least
-  friction path for this app.
+- Context: the Cursor subscription was merged into another subscription, so
+  its standalone monthly `Auto + Composer` / `API` quota no longer exists.
+- Alternatives considered: keep the tracker behind a default-off toggle.
+- Rationale: dead provider code still reads `state.vscdb` and calls a
+  retired dashboard endpoint; removing it (services, display, icon, preference
+  key, tests) keeps Live quota and the menu bar to providers with real quota.
+  A stale `usageLimitTracker.cursor.isEnabled` default may linger in user
+  defaults; nothing reads it.
+
+### Decision: OpenCode and Pi history support removed
+
+- Context: only Claude Code and Codex are in use; the other two importers
+  added a SQLite reader, two agent cases, and icons for no data.
+- Alternatives considered: keep the importers but hide the agents in the UI.
+- Rationale: removing `UsageAgent.openCode`/`.pi` keeps every agent switch
+  honest. Stored rows with those agents would no longer decode, so the v3→v4
+  store migration deletes them from `usage_event`, `usage_active_turn`, and
+  `import_checkpoint` instead of letting one stale row fail every read.
+
+### Decision: Fable weekly window is pinned for Claude Code
+
+- Context: Fable plans carry a separate model-scoped weekly limit that the user
+  wants visible at all times, not only when the API happens to report it.
+- Alternatives considered: show it only when present (the generic model-tier
+  path), which hides it entirely on a missing or renamed field.
+- Rationale: `ClaudeUsageLimitKind.fableWeek` sits beside `5h` and `7d`, so a
+  missing value renders `--` instead of disappearing, matching how the
+  account-wide windows behave.
 
 
 ### Decision: Claude Code uses Claude.ai OAuth usage

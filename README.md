@@ -1,7 +1,7 @@
 # BorderCollie
 
 BorderCollie is a native macOS SwiftUI app for monitoring coding-agent usage
-limits from one local desktop surface. It currently tracks Codex, Cursor, and
+limits from one local desktop surface. It currently tracks Codex and
 Claude Code, showing consumed usage in the main window and a compact menu-bar
 popup.
 
@@ -11,7 +11,7 @@ layers, and never passed into SwiftUI views.
 
 ## Features
 
-- Native macOS app with a sidebar for Codex, Cursor, and Claude Code trackers.
+- Native macOS app with a sidebar for Codex and Claude Code trackers.
 - Agent brand icons in the sidebar, main window, and menu-bar popup.
 - Automatic Claude Code OAuth token refresh, so a stale access token recovers
   without re-running the CLI.
@@ -25,7 +25,7 @@ layers, and never passed into SwiftUI views.
 - Preview-safe SwiftUI surfaces that do not read credentials or call networks.
 - Swift Testing coverage for credential parsing, API normalization, display
   formatting, compact menu-bar summaries, and failure mapping.
-- A local historical usage dashboard for Claude Code, Codex, OpenCode, and Pi
+- A local historical usage dashboard for Claude Code and Codex
   with rolling 24-hour, 7-day, and 30-day periods, hourly/daily token and cost
   charts, normalized metrics, and detailed model/day token breakdowns.
 - Evaluation Runs that bracket a live task or select a past interval, include
@@ -54,24 +54,16 @@ menu-bar compact format is:
 5h: 20% | 7d: 10%
 ```
 
-### Cursor
+### Claude Code
 
-Cursor usage is fetched from:
-
-```text
-https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage
-```
-
-Credential lookup:
-
-1. `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`.
-2. `ItemTable` key `cursorAuth/accessToken`.
-
-The main window displays current monthly `Auto + Composer` and `API` consumed
-usage. The menu-bar compact format is:
+Claude Code usage comes from the Claude.ai OAuth usage endpoint, using the
+credentials Claude Code stores in the Keychain (or `~/.claude/.credentials.json`).
+The main window always shows the 5-hour, weekly, and Fable weekly windows
+(`--` when a window is not reported), followed by any other model-scoped weekly
+windows. The menu-bar compact format is:
 
 ```text
-Auto: 5% | API: 40%
+5h: 52% | 7d: 36% | Fable: 70%
 ```
 
 ## Architecture
@@ -91,19 +83,18 @@ State and refresh orchestration
 
 Provider services
   CodexQuotaService
-  CursorQuotaService
+  ClaudeQuotaService
 
 Credential and API clients
   CodexCredentialResolver
   CodexUsageClient
-  CursorCredentialResolver
-  CursorUsageClient
+  ClaudeCredentialResolver
+  ClaudeUsageClient
 
 Historical analytics backend (separate from subscription quota)
   UsageAnalyticsBackend
   UsageAnalyticsStore
   ClaudeCodeUsageImporter / CodexUsageImporter
-  OpenCodeUsageImporter / PiUsageImporter
   UsagePricingEngine / UsageAggregator
 
 Historical analytics UI
@@ -137,14 +128,14 @@ Security boundaries to preserve:
 
 The app target currently has the macOS app sandbox disabled because the trackers
 need local auth-file access, subprocess credential lookup, and remote quota
-requests. If sandboxing is re-enabled, retest Keychain access, Cursor SQLite
-access, Codex auth-file access, and network calls.
+requests. If sandboxing is re-enabled, retest Keychain access,
+Codex auth-file access, and network calls.
 
 ## Requirements
 
 - macOS 26.5 or newer target SDK/runtime.
 - Xcode 26.6 or a compatible version for the current project format.
-- A signed-in Codex CLI or Cursor install for live tracker data.
+- A signed-in Codex CLI or Claude Code install for live tracker data.
 
 ## Build And Verify
 
@@ -177,7 +168,7 @@ BorderCollie/
   UsageQuotaQuery.swift          Shared full-query timeout wrapper
   UsageTrackingService.swift     Shared service and HTTP protocols
   Codex*.swift                   Codex credential, API, display, and view code
-  Cursor*.swift                  Cursor credential, API, display, and view code
+  Claude*.swift                  Claude Code credential, API, display, and gate code
   UsageDashboard/                Historical import, pricing, aggregation, and UI
                                  plus session-scoped Evaluation Runs
 BorderCollieTests/

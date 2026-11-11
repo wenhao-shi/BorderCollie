@@ -45,25 +45,6 @@ struct LiveQuotaTracker: Identifiable, Sendable {
         )
     )
 
-    static let cursor = LiveQuotaTracker(
-        id: "cursor",
-        title: "Cursor",
-        icon: .cursor,
-        service: CursorQuotaService.live,
-        usageLimits: CursorUsageLimitDisplay.usageLimits,
-        refreshInterval: .seconds(30),
-        copy: UsageTrackerCopy(
-            querying: "Checking Cursor usage…",
-            ready: "Refresh to check your current Cursor usage.",
-            notFoundTitle: "Not signed in to Cursor",
-            notFoundMessage: "Sign in to Cursor, then refresh.",
-            parseErrorTitle: "Cursor sign-in state could not be read",
-            expiredTitle: "Cursor sign-in expired",
-            expiredMessage: "Sign in to Cursor again, then refresh.",
-            genericError: "The Cursor usage API did not return a usable response."
-        )
-    )
-
     /// Claude polls at 60 seconds, not 30: its OAuth usage endpoint rate-limits
     /// harder. `ClaudeUsageRequestGate` still gates the actual request.
     static let claudeCode = LiveQuotaTracker(
@@ -86,7 +67,7 @@ struct LiveQuotaTracker: Identifiable, Sendable {
     )
 
     /// Product order, matching the menu-bar panel.
-    static let all: [LiveQuotaTracker] = [.codex, .cursor, .claudeCode]
+    static let all: [LiveQuotaTracker] = [.codex, .claudeCode]
 }
 
 /// Every tracked provider's live quota on one page.
@@ -97,11 +78,9 @@ struct LiveQuotaTracker: Identifiable, Sendable {
 /// clicks apart.
 struct LiveQuotaView: View {
     @AppStorage(UsageLimitTrackerPreferenceKey.codex) private var tracksCodex = true
-    @AppStorage(UsageLimitTrackerPreferenceKey.cursor) private var tracksCursor = true
     @AppStorage(UsageLimitTrackerPreferenceKey.claudeCode) private var tracksClaudeCode = true
 
     @StateObject private var codex: UsageTrackerViewModel
-    @StateObject private var cursor: UsageTrackerViewModel
     @StateObject private var claudeCode: UsageTrackerViewModel
 
     private let runsAutoRefresh: Bool
@@ -110,7 +89,6 @@ struct LiveQuotaView: View {
     @MainActor
     init(runsAutoRefresh: Bool = true) {
         _codex = StateObject(wrappedValue: UsageTrackerViewModel(service: LiveQuotaTracker.codex.service))
-        _cursor = StateObject(wrappedValue: UsageTrackerViewModel(service: LiveQuotaTracker.cursor.service))
         _claudeCode = StateObject(wrappedValue: UsageTrackerViewModel(service: LiveQuotaTracker.claudeCode.service))
         self.runsAutoRefresh = runsAutoRefresh
         self.usesTrackerPreferences = true
@@ -119,12 +97,10 @@ struct LiveQuotaView: View {
     @MainActor
     init(
         codex: UsageTrackerViewModel,
-        cursor: UsageTrackerViewModel,
         claudeCode: UsageTrackerViewModel,
         runsAutoRefresh: Bool = false
     ) {
         _codex = StateObject(wrappedValue: codex)
-        _cursor = StateObject(wrappedValue: cursor)
         _claudeCode = StateObject(wrappedValue: claudeCode)
         self.runsAutoRefresh = runsAutoRefresh
         self.usesTrackerPreferences = false
@@ -136,9 +112,6 @@ struct LiveQuotaView: View {
                 Form {
                     if showsCodex {
                         trackerSection(.codex, viewModel: codex)
-                    }
-                    if showsCursor {
-                        trackerSection(.cursor, viewModel: cursor)
                     }
                     if showsClaudeCode {
                         trackerSection(.claudeCode, viewModel: claudeCode)
@@ -161,7 +134,6 @@ struct LiveQuotaView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Toggle("Codex", isOn: tracksCodexBinding)
-                    Toggle("Cursor", isOn: tracksCursorBinding)
                     Toggle("Claude Code", isOn: tracksClaudeCodeBinding)
                 } label: {
                     Label("Trackers", systemImage: "line.3.horizontal.decrease")
@@ -185,12 +157,9 @@ struct LiveQuotaView: View {
             }
         }
         // One loop per provider, so Claude's slower cadence does not drag the
-        // other two and a slow provider cannot delay its neighbours' polls.
+        // other and a slow provider cannot delay its neighbours' polls.
         .task(id: showsCodex) {
             await autoRefresh(codex, enabled: showsCodex, every: LiveQuotaTracker.codex.refreshInterval)
-        }
-        .task(id: showsCursor) {
-            await autoRefresh(cursor, enabled: showsCursor, every: LiveQuotaTracker.cursor.refreshInterval)
         }
         .task(id: showsClaudeCode) {
             await autoRefresh(claudeCode, enabled: showsClaudeCode, every: LiveQuotaTracker.claudeCode.refreshInterval)
@@ -199,20 +168,15 @@ struct LiveQuotaView: View {
 
     private var isRefreshing: Bool {
         (showsCodex && codex.isLoading)
-            || (showsCursor && cursor.isLoading)
             || (showsClaudeCode && claudeCode.isLoading)
     }
 
     private var hasEnabledTrackers: Bool {
-        showsCodex || showsCursor || showsClaudeCode
+        showsCodex || showsClaudeCode
     }
 
     private var showsCodex: Bool {
         !usesTrackerPreferences || tracksCodex
-    }
-
-    private var showsCursor: Bool {
-        !usesTrackerPreferences || tracksCursor
     }
 
     private var showsClaudeCode: Bool {
@@ -223,13 +187,6 @@ struct LiveQuotaView: View {
         Binding(
             get: { showsCodex },
             set: { if usesTrackerPreferences { tracksCodex = $0 } }
-        )
-    }
-
-    private var tracksCursorBinding: Binding<Bool> {
-        Binding(
-            get: { showsCursor },
-            set: { if usesTrackerPreferences { tracksCursor = $0 } }
         )
     }
 
@@ -244,9 +201,6 @@ struct LiveQuotaView: View {
         if showsCodex {
             codex.refresh()
         }
-        if showsCursor {
-            cursor.refresh()
-        }
         if showsClaudeCode {
             claudeCode.refresh()
         }
@@ -254,7 +208,6 @@ struct LiveQuotaView: View {
 
     private func enableAllTrackers() {
         tracksCodex = true
-        tracksCursor = true
         tracksClaudeCode = true
     }
 
@@ -464,10 +417,6 @@ struct LiveQuotaView_Previews: PreviewProvider {
                     service: LiveQuotaTracker.codex.service,
                     initialQuota: .previewCodexUsage
                 ),
-                cursor: UsageTrackerViewModel(
-                    service: LiveQuotaTracker.cursor.service,
-                    initialQuota: .previewCursorUsage
-                ),
                 claudeCode: UsageTrackerViewModel(
                     service: LiveQuotaTracker.claudeCode.service,
                     initialQuota: .previewClaudeUsage
@@ -496,22 +445,6 @@ private extension SubscriptionQuota {
         )
     }
 
-    static var previewCursorUsage: SubscriptionQuota {
-        SubscriptionQuota(
-            tool: "cursor",
-            credentialStatus: .valid,
-            credentialMessage: nil,
-            success: true,
-            tiers: [
-                QuotaTier(name: CursorUsageLimitKind.autoComposer.rawValue, utilization: 1, resetsAt: "2026-07-30T03:12:17Z"),
-                QuotaTier(name: CursorUsageLimitKind.api.rawValue, utilization: 0, resetsAt: "2026-07-30T03:12:17Z"),
-            ],
-            extraUsage: "You've used 1% of your included usage",
-            error: nil,
-            queriedAt: Date().millisecondsSince1970
-        )
-    }
-
     static var previewClaudeUsage: SubscriptionQuota {
         SubscriptionQuota(
             tool: "claude_code",
@@ -521,6 +454,7 @@ private extension SubscriptionQuota {
             tiers: [
                 QuotaTier(name: ClaudeUsageLimitKind.fiveHour.rawValue, utilization: 48, resetsAt: "2026-07-27T20:00:00Z"),
                 QuotaTier(name: ClaudeUsageLimitKind.week.rawValue, utilization: 64, resetsAt: "2026-08-01T06:00:00Z"),
+                QuotaTier(name: ClaudeUsageLimitKind.fableWeek.rawValue, utilization: 30, resetsAt: "2026-08-01T06:00:00Z"),
             ],
             extraUsage: nil,
             error: nil,

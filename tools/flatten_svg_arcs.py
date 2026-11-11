@@ -28,7 +28,6 @@ CATALOG = REPO / "BorderCollie/Assets.xcassets"
 ICON_SETS = {
     "AgentIconClaude": ("claude-color.svg", "original"),
     "AgentIconCodex": ("codex.svg", "template"),
-    "AgentIconCursor": ("cursor.svg", "template"),
     "MenuBarIcon": ("ollama.svg", "template"),
 }
 

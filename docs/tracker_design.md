@@ -2,7 +2,7 @@
 
 This document describes the design of BorderCollie's usage tracking feature and
 the standards future trackers should follow. The current implementation tracks
-Codex, Cursor, and Claude Code usage. Future trackers should preserve
+Codex and Claude Code usage. Future trackers should preserve
 the same user experience and normalized quota model while isolating each agent's
 credential and API details.
 
@@ -32,7 +32,7 @@ The `Live quota` screen defines the product standard for future trackers:
 
 - The sidebar contains a single `Live quota` destination, not one tab per
   tracker. Every tracked provider is a section on that one page, in product
-  order: Codex, Cursor, Claude Code. Comparing two providers should not cost a
+  order: Codex, Claude Code. Comparing two providers should not cost a
   navigation.
 - Each section keeps its own view model, poll cadence, and failure state. One
   provider being signed out or rate-limited must never blank another. Do not
@@ -83,10 +83,10 @@ The menu-bar companion follows the same usage semantics in a compact format:
 - Claude Code network calls inside that loop are gated to about once every
   60 seconds and back off for at least five minutes after HTTP 429.
 - A compact row is shown for each tracked agent, ordered `Codex`, then
-  `Cursor`, then `Claude Code`.
+  `Claude Code`.
 - Codex compact format: `5h: 80% | 7d: 90%`.
-- Cursor compact format: `Auto: 95% | API: 60%`.
-- Claude Code compact format: `5h: 52% | 7d: 36%`.
+- Claude Code compact format: `5h: 52% | 7d: 36% | Fable: 70%`, followed by
+  any other model-scoped weekly windows.
 - Compact percentages are usage remaining, rounded to whole percentages.
 - Missing compact tiers show `--`.
 - Detailed menu-bar UI and row-state rules live in
@@ -97,7 +97,7 @@ The live-quota UI is implemented in:
 - `BorderCollie/ContentView.swift` — sidebar destination.
 - `BorderCollie/LiveQuotaView.swift` — the page, the `LiveQuotaTracker`
   descriptors, and each tracker's `UsageTrackerCopy`.
-- `BorderCollie/CodexUsageDisplay.swift`, `CursorUsageDisplay.swift`,
+- `BorderCollie/CodexUsageDisplay.swift`,
   `ClaudeUsageDisplay.swift` — per-provider row labels and limit mapping.
 
 ## Architecture Overview
@@ -148,7 +148,7 @@ are initially provider-specific.
 
 The shared normalized model lives in `CodexUsageModels.swift` today. Some names
 remain Codex-oriented from the first tracker, but the shapes are shared by
-Codex, Cursor, and Claude Code.
+Codex and Claude Code.
 
 ### `CredentialStatus`
 
@@ -249,72 +249,13 @@ Unknown windows should be normalized using the current generic naming rule:
 - `<n>_hour` for windows under 24 hours.
 - `<n>_day` for windows of 24 hours or more.
 
-## Current Cursor Implementation
-
-### Credential Resolution
-
-Cursor credential lookup is implemented in `CursorCredentialResolver`.
-
-Current lookup:
-
-1. `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`.
-2. `ItemTable` key `cursorAuth/accessToken`.
-
-Current safety rules:
-
-- SQLite lookup uses `/usr/bin/sqlite3`.
-- SQLite lookup has a 2-second timeout.
-- Tokens are retained only in service/client layers.
-- Tokens are never passed to SwiftUI views.
-- Missing or empty tokens are treated as `notFound`.
-- SQLite read failures are treated as `parseError`.
-
-### Remote Query
-
-Cursor usage is fetched by `CursorUsageClient`.
-
-Current endpoint:
-
-```text
-https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage
-```
-
-Current request behavior:
-
-- Method: `POST`
-- Body: `{}`
-- Timeout: 15 seconds.
-- Headers:
-  - `Authorization: Bearer <cursorAuth/accessToken>`
-  - `Content-Type: application/json`
-  - `Accept: application/json`
-  - `Connect-Protocol-Version: 1`
-  - `User-Agent: Cursor`
-
-Current response mapping:
-
-- `planUsage.autoPercentUsed` becomes `cursor_auto_composer`.
-- `planUsage.apiPercentUsed` becomes `cursor_api`.
-- `billingCycleEnd` maps to each tier reset timestamp.
-- Cursor reports current monthly used percentages; display derives remaining
-  usage from them.
-
-Known Cursor windows:
-
-| Tier name | UI label |
-| --- | --- |
-| `cursor_auto_composer` | `Auto + Composer` |
-| `cursor_api` | `API` |
-
-The compact menu-bar labels are `Auto` and `API`.
-
 ### Refresh Behavior
 
 Refresh behavior is split between the view and view model:
 
 - `LiveQuotaView` starts every tracker's refresh automatically on page open.
 - `LiveQuotaView` runs one loop per tracker at that tracker's own cadence —
-  30 seconds for Codex and Cursor, 60 for Claude Code — so a slow provider
+  30 seconds for Codex, 60 for Claude Code — so a slow provider
   cannot delay its neighbours' polls.
 - `LiveQuotaView` disables auto refresh in Xcode previews.
 - `UsageTrackerViewModel` ignores refresh requests while `isLoading` is true.
@@ -390,8 +331,17 @@ Known Claude Code windows:
 | --- | --- |
 | `five_hour` | `5h` |
 | `seven_day` | `7d` |
+| `seven_day_fable` | `7d · Fable` |
+| `seven_day_<model>` | `7d · <Model>` |
 
-The compact menu-bar labels are `5h` and `7d`.
+`5h`, `7d`, and `7d · Fable` are always listed (`--` when the response omits
+them); other model-scoped weekly windows appear only when reported. Model
+names from both the flat `seven_day_<model>` keys and the structured `limits`
+array (`kind: weekly_scoped`) are normalized by
+`ClaudeUsageLimitKind.normalizedModelName`, so `fable`, `claude-fable-5-2`, and
+`Claude Fable 5.2` all land on `seven_day_fable`; `limits` wins on conflict.
+
+The compact menu-bar labels are `5h`, `7d`, `Fable`, then the model name.
 
 
 ### Refresh And Rate Limiting

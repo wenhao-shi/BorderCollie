@@ -17,14 +17,14 @@ struct UsageDashboardTests {
 
     @Test func missingBucketAndMismatchedSourceTotalRemainPartial() throws {
         let missing = try UsageEvent.normalized(
-            agent: .pi, pricingAuthority: .openAI, rawProviderID: "openai-codex",
+            agent: .codex, pricingAuthority: .openAI, rawProviderID: "openai-codex",
             rawModelID: "gpt-5.6-sol", canonicalModelID: "gpt-5.6-sol",
             occurredAtMilliseconds: timestamp("2026-08-01T12:00:00Z"), inputTokens: 1,
             cacheWriteTokens: nil, cacheReadTokens: 2, outputTokens: 3, sourceTotalTokens: nil,
             sourceKey: "source", sourceID: "missing", sourceSchemaVersion: "test", importerVersion: 1
         )
         let mismatch = try UsageEvent.normalized(
-            agent: .pi, pricingAuthority: .openAI, rawProviderID: "openai-codex",
+            agent: .codex, pricingAuthority: .openAI, rawProviderID: "openai-codex",
             rawModelID: "gpt-5.6-sol", canonicalModelID: "gpt-5.6-sol",
             occurredAtMilliseconds: timestamp("2026-08-01T12:00:00Z"), inputTokens: 1,
             cacheWriteTokens: 2, cacheReadTokens: 3, outputTokens: 4, sourceTotalTokens: 11,
@@ -115,65 +115,6 @@ struct UsageDashboardTests {
         #expect(turn.timingQuality == .exact)
     }
 
-    @Test func piImporterPreservesProviderModelAndReportedCost() throws {
-        let fixture = try TemporaryUsageFixture()
-        _ = try fixture.file("session/session.jsonl", contents: #"{"id":"entry-1","timestamp":"2026-08-01T12:00:00Z","type":"message","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.6-sol","responseId":"response-1","usage":{"input":10,"cacheWrite":20,"cacheRead":30,"output":40,"reasoning":10,"totalTokens":100,"cost":{"input":0.1,"cacheWrite":0.1,"cacheRead":0.1,"output":0.1,"total":0.4}}}}"# + "\n")
-        let batch = try PiUsageImporter(sessionsRoot: fixture.root).importBatch(checkpoints: [:])
-        let event = try #require(batch.events.first)
-
-        #expect(event.pricingAuthority == .openAI)
-        #expect(event.rawProviderID == "openai-codex")
-        #expect(event.canonicalModelID == "gpt-5.6-sol")
-        #expect(event.totalTokens == 100)
-        #expect(event.sourceReportedCostNanodollars == 400_000_000)
-    }
-
-    @Test func piImporterInfersTimingAcrossToolMessages() throws {
-        let fixture = try TemporaryUsageFixture()
-        let lines = [
-            #"{"id":"user-1","timestamp":"2026-08-01T12:00:00Z","type":"message","message":{"role":"user","timestamp":1785585600000,"content":"Run the task"}}"#,
-            #"{"id":"assistant-tool","timestamp":"2026-08-01T12:00:03Z","type":"message","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.6-sol","stopReason":"toolUse"}}"#,
-            #"{"id":"tool-1","timestamp":"2026-08-01T12:00:05Z","type":"message","message":{"role":"toolResult"}}"#,
-            #"{"id":"assistant-final","timestamp":"2026-08-01T12:00:09Z","type":"message","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.6-sol","stopReason":"stop"}}"#,
-        ]
-        _ = try fixture.file("session/session.jsonl", contents: lines.joined(separator: "\n") + "\n")
-
-        let batch = try PiUsageImporter(sessionsRoot: fixture.root).importBatch(checkpoints: [:])
-        let turn = try #require(batch.activeTurns.first)
-
-        #expect(batch.activeTurns.count == 1)
-        #expect(turn.durationMilliseconds == 9_000)
-        #expect(turn.rawModelID == "gpt-5.6-sol")
-        #expect(turn.timingQuality == .inferred)
-    }
-
-    @Test func openCodeImporterReadsSourceDatabaseWithoutWritingIt() throws {
-        let fixture = try TemporaryUsageFixture()
-        let databaseURL = fixture.root.appendingPathComponent("opencode.db")
-        try createOpenCodeDatabase(at: databaseURL)
-        let before = try UsageSourceIdentity.metadata(for: databaseURL)
-
-        let first = try OpenCodeUsageImporter(databaseURL: databaseURL).importBatch(checkpoints: [:])
-        let event = try #require(first.events.first)
-        let after = try UsageSourceIdentity.metadata(for: databaseURL)
-        #expect(event.rawProviderID == "opencode")
-        #expect(event.rawModelID == "free-model")
-        #expect(event.pricingAuthority == .unknown)
-        #expect(event.sourceReportedCostNanodollars == 0)
-        #expect(event.totalTokens == 110)
-        #expect(event.sessionKey != nil)
-        #expect(first.activeTurns.count == 1)
-        #expect(first.activeTurns.first?.durationMilliseconds == 5_000)
-        #expect(first.activeTurns.first?.timingQuality == .exact)
-        #expect(before == after)
-
-        let checkpoint = try #require(first.checkpoints.first)
-        let second = try OpenCodeUsageImporter(databaseURL: databaseURL).importBatch(
-            checkpoints: [checkpoint.sourceKey: checkpoint]
-        )
-        #expect(second.events.count == 1)
-    }
-
     @Test func JSONLReaderDoesNotCheckpointAnIncompleteTrailingRecord() throws {
         let fixture = try TemporaryUsageFixture()
         let file = try fixture.file("partial.jsonl", contents: "{\"one\":1}\n{\"two\":")
@@ -189,22 +130,22 @@ struct UsageDashboardTests {
     @Test func JSONLSourceResetDetectsTruncationAndImporterVersionChanges() throws {
         let fixture = try TemporaryUsageFixture()
         let file = try fixture.file("source.jsonl", contents: "{\"one\":1}\n")
-        let sourceKey = UsageSourceIdentity.sourceKey(agent: .pi, url: file)
+        let sourceKey = UsageSourceIdentity.sourceKey(agent: .codex, url: file)
         let metadata = try UsageSourceIdentity.metadata(for: file)
         let checkpoint = UsageImportCheckpoint(
-            agent: .pi, sourceKey: sourceKey, sourceIdentity: metadata.identity,
+            agent: .codex, sourceKey: sourceKey, sourceIdentity: metadata.identity,
             sourceSize: metadata.size + 10, modifiedAtMilliseconds: metadata.modifiedAtMilliseconds,
             byteOffset: metadata.size + 10, highWatermark: nil, importerVersion: 1
         )
 
         let truncated = try UsageSourceDiscovery.prepareJSONLSource(
-            agent: .pi, url: file, checkpoint: checkpoint, importerVersion: 1
+            agent: .codex, url: file, checkpoint: checkpoint, importerVersion: 1
         )
         let upgraded = try UsageSourceDiscovery.prepareJSONLSource(
-            agent: .pi,
+            agent: .codex,
             url: file,
             checkpoint: UsageImportCheckpoint(
-                agent: .pi, sourceKey: sourceKey, sourceIdentity: metadata.identity,
+                agent: .codex, sourceKey: sourceKey, sourceIdentity: metadata.identity,
                 sourceSize: metadata.size, modifiedAtMilliseconds: metadata.modifiedAtMilliseconds,
                 byteOffset: metadata.size, highWatermark: nil, importerVersion: 1
             ),
@@ -228,7 +169,7 @@ struct UsageDashboardTests {
     @Test func storeCreatesSchemaUpsertsIdempotentlyAndRollsBackBatch() async throws {
         let fixture = try TemporaryUsageFixture()
         let store = try UsageAnalyticsStore(databaseURL: fixture.root.appendingPathComponent("analytics.sqlite3"))
-        var batch = UsageImportBatch(agent: .pi)
+        var batch = UsageImportBatch(agent: .codex)
         batch.events = [try makeEvent()]
         batch.checkpoints = [checkpoint(sourceKey: "source")]
         try await store.apply(batch)
@@ -237,7 +178,7 @@ struct UsageDashboardTests {
         #expect(try await store.events(agents: []).isEmpty)
 
         let rollbackStore = try UsageAnalyticsStore(databaseURL: fixture.root.appendingPathComponent("rollback.sqlite3"))
-        var invalid = UsageImportBatch(agent: .pi)
+        var invalid = UsageImportBatch(agent: .codex)
         invalid.events = [try makeEvent(sourceID: "rollback")]
         invalid.checkpoints = [checkpoint(sourceKey: "")]
         await #expect(throws: UsageAnalyticsStoreError.self) {
@@ -249,7 +190,7 @@ struct UsageDashboardTests {
     @Test func storePersistsTurnAndEvaluationSessionSelection() async throws {
         let fixture = try TemporaryUsageFixture()
         let store = try UsageAnalyticsStore(databaseURL: fixture.root.appendingPathComponent("analytics.sqlite3"))
-        var batch = UsageImportBatch(agent: .pi)
+        var batch = UsageImportBatch(agent: .codex)
         batch.events = [try makeEvent(sourceKey: "source", sessionKey: "session-a")]
         batch.activeTurns = [try makeTurn(sessionKey: "session-a")]
         batch.checkpoints = [checkpoint(sourceKey: "source")]
@@ -272,6 +213,31 @@ struct UsageDashboardTests {
         #expect(try await store.evaluationSessionKeys(runID: run.id).isEmpty)
     }
 
+    @Test func storeMigrationPurgesRemovedOpenCodeAndPiRows() async throws {
+        let fixture = try TemporaryUsageFixture()
+        let url = fixture.root.appendingPathComponent("v3.sqlite3")
+        do {
+            let store = try UsageAnalyticsStore(databaseURL: url)
+            var batch = UsageImportBatch(agent: .codex)
+            batch.events = [try makeEvent(sourceID: "kept"), try makeEvent(sourceID: "pi-row"), try makeEvent(sourceID: "opencode-row")]
+            batch.checkpoints = [checkpoint(sourceKey: "source")]
+            try await store.apply(batch)
+        }
+        try databaseExecute(at: url, sql: """
+        UPDATE usage_event SET agent = 'pi' WHERE source_id = 'pi-row';
+        UPDATE usage_event SET agent = 'opencode' WHERE source_id = 'opencode-row';
+        UPDATE import_checkpoint SET agent = 'pi';
+        PRAGMA user_version = 3;
+        """)
+
+        let store = try UsageAnalyticsStore(databaseURL: url)
+
+        #expect(try databaseUserVersion(at: url) == 4)
+        #expect(try await store.events(agents: [.codex]).map(\.sourceID) == ["kept"])
+        #expect(try databaseScalar(at: url, sql: "SELECT COUNT(*) FROM usage_event") == 1)
+        #expect(try databaseScalar(at: url, sql: "SELECT COUNT(*) FROM import_checkpoint") == 0)
+    }
+
     @Test func storeMigratesVersionOneAliasSchema() async throws {
         let fixture = try TemporaryUsageFixture()
         let url = fixture.root.appendingPathComponent("legacy.sqlite3")
@@ -284,6 +250,52 @@ struct UsageDashboardTests {
             "authority", "raw_model_id", "canonical_model_id", "effective_from_ms",
             "effective_until_ms", "source_url",
         ])
+    }
+
+    @Test func pricingCoversNewClaudeModelsAndHaikuPromptLengthTier() throws {
+        let engine = UsagePricingEngine()
+
+        let opus = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-opus-5-5",
+            occurredAt: "2026-10-01T12:00:00Z", input: 100, cacheWrite: 20,
+            cacheRead: 30, output: 40, write5m: 10, write1h: 10
+        )
+        #expect(engine.price(opus) == .priced(costNanodollars: 1_336_000, ruleID: "anthropic-opus-5-5"))
+
+        let fable = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-fable-5-2",
+            occurredAt: "2026-11-10T12:00:00Z", input: 100, cacheRead: 1_000, output: 10
+        )
+        #expect(engine.price(fable) == .priced(costNanodollars: 1_400_000, ruleID: "anthropic-fable-5-2"))
+
+        let sonnet = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-sonnet-5-5",
+            occurredAt: "2026-10-01T12:00:00Z", input: 100, cacheRead: 100, output: 10
+        )
+        #expect(engine.price(sonnet) == .priced(costNanodollars: 310_000, ruleID: "anthropic-sonnet-5-5"))
+
+        let haikuAtThreshold = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-haiku-5-5",
+            occurredAt: "2026-10-08T12:00:00Z", input: 50_000, cacheRead: 50_000, output: 100
+        )
+        #expect(engine.price(haikuAtThreshold) == .priced(costNanodollars: 5_550_000, ruleID: "anthropic-haiku-5-5"))
+
+        let haikuOverThreshold = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-haiku-5-5",
+            occurredAt: "2026-10-08T12:00:00Z", input: 50_001, cacheRead: 50_000, output: 100
+        )
+        #expect(engine.price(haikuOverThreshold) == .priced(costNanodollars: 27_750_500, ruleID: "anthropic-haiku-5-5"))
+
+        let beforeLaunch = try makeEvent(
+            agent: .claudeCode, authority: .anthropic, model: "claude-opus-5-5",
+            occurredAt: "2026-09-21T23:59:59Z"
+        )
+        #expect(engine.price(beforeLaunch) == .unavailable(.unknownModel))
+
+        #expect(UsageModelCatalog.canonicalModelID(
+            authority: .anthropic, rawModelID: "claude-fable-5-2",
+            occurredAtMilliseconds: timestamp("2026-11-10T00:00:00Z")
+        ) == "claude-fable-5-2")
     }
 
     @Test func pricingUsesEffectiveRuleCacheClassesAndLongContextModifier() throws {
@@ -358,12 +370,12 @@ struct UsageDashboardTests {
     }
 
     @Test func aggregationReconcilesBucketsRatesCoverageAndFilters() throws {
-        var priced = try makeEvent(input: 10, cacheWrite: 20, cacheRead: 30, output: 40, reasoning: 5)
+        var priced = try makeEvent(agent: .claudeCode, input: 10, cacheWrite: 20, cacheRead: 30, output: 40, reasoning: 5)
         priced.estimatedAPICostNanodollars = 1_000
         priced.pricingRuleID = "rule"
         let unpriced = try makeEvent(agent: .codex, sourceID: "unpriced", input: 1, cacheWrite: 2, cacheRead: 3, output: 4)
         let partial = try UsageEvent.normalized(
-            agent: .pi, pricingAuthority: .openAI, rawProviderID: "openai-codex", rawModelID: "unknown",
+            agent: .claudeCode, pricingAuthority: .openAI, rawProviderID: "openai-codex", rawModelID: "unknown",
             canonicalModelID: nil, occurredAtMilliseconds: timestamp("2026-08-01T12:00:00Z"),
             inputTokens: 1, cacheWriteTokens: nil, cacheReadTokens: 1, outputTokens: 1,
             sourceTotalTokens: nil, sourceKey: "source", sourceID: "partial",
@@ -390,7 +402,7 @@ struct UsageDashboardTests {
         #expect(aggregate.daily.count == UsageAgent.allCases.count)
         #expect(aggregate.chartPoints.count == UsageAgent.allCases.count * 24)
 
-        let pricedPoint = try #require(aggregate.daily.first { $0.agent == .pi })
+        let pricedPoint = try #require(aggregate.daily.first { $0.agent == .claudeCode })
         let unpricedPoint = try #require(aggregate.daily.first { $0.agent == .codex })
         #expect(pricedPoint.completeEvents == 1)
         #expect(pricedPoint.pricedEvents == 1)
@@ -401,7 +413,7 @@ struct UsageDashboardTests {
         #expect(unpricedPoint.completeEvents == 1)
         #expect(unpricedPoint.pricedEvents == 0)
 
-        let pricedModel = try #require(aggregate.models.first { $0.agent == .pi })
+        let pricedModel = try #require(aggregate.models.first { $0.agent == .claudeCode })
         #expect(pricedModel.inputTokens == 10)
         #expect(pricedModel.cacheWriteTokens == 20)
         #expect(pricedModel.cacheReadTokens == 30)
@@ -409,10 +421,10 @@ struct UsageDashboardTests {
         #expect(pricedModel.reasoningOutputTokens == 5)
 
         let summaries = UsageDashboardPresentation.agentSummaries(from: aggregate)
-        #expect(summaries.map(\.agent) == [.codex, .pi])
+        #expect(summaries.map(\.agent) == [.codex, .claudeCode])
         #expect(summaries.first { $0.agent == .codex }?.hasPartialPricing == true)
-        #expect(UsageDashboardPresentation.chartAgents(from: aggregate, metric: .cost) == [.pi])
-        #expect(UsageDashboardPresentation.chartAgents(from: aggregate, metric: .tokens) == [.codex, .pi])
+        #expect(UsageDashboardPresentation.chartAgents(from: aggregate, metric: .cost) == [.claudeCode])
+        #expect(UsageDashboardPresentation.chartAgents(from: aggregate, metric: .tokens) == [.codex, .claudeCode])
         let day = try #require(UsageDashboardPresentation.dayBreakdown(from: aggregate).first)
         #expect(day.completeEvents == 2)
         #expect(day.inputTokens == 11)
@@ -508,7 +520,7 @@ struct UsageDashboardTests {
             events: events,
             range: .oneDay,
             interval: interval,
-            agents: [.pi],
+            agents: [.codex],
             calendar: utcCalendar
         )
 
@@ -628,7 +640,7 @@ struct UsageDashboardTests {
                 UsageChartCurvePoint(date: start, value: 1),
                 UsageChartCurvePoint(date: end, value: 2),
             ],
-            .pi: [
+            .claudeCode: [
                 UsageChartCurvePoint(date: start, value: 3),
                 UsageChartCurvePoint(date: end, value: 4),
             ],
@@ -640,7 +652,7 @@ struct UsageDashboardTests {
 }
 
 private func makeEvent(
-    agent: UsageAgent = .pi,
+    agent: UsageAgent = .codex,
     authority: PricingAuthority = .openAI,
     model: String = "gpt-5.6-sol",
     sourceID: String = "event",
@@ -667,7 +679,7 @@ private func makeEvent(
 }
 
 private func makeTurn(
-    agent: UsageAgent = .pi,
+    agent: UsageAgent = .codex,
     authority: PricingAuthority = .openAI,
     model: String = "gpt-5.6-sol",
     sessionKey: String,
@@ -693,7 +705,7 @@ private func makeTurn(
 
 private func checkpoint(sourceKey: String) -> UsageImportCheckpoint {
     UsageImportCheckpoint(
-        agent: .pi, sourceKey: sourceKey, sourceIdentity: "identity", sourceSize: 1,
+        agent: .codex, sourceKey: sourceKey, sourceIdentity: "identity", sourceSize: 1,
         modifiedAtMilliseconds: 1, byteOffset: 1, highWatermark: nil, importerVersion: 1
     )
 }
@@ -737,28 +749,6 @@ private func append(_ value: String, to url: URL) throws {
     try handle.write(contentsOf: Data(value.utf8))
 }
 
-private func createOpenCodeDatabase(at url: URL) throws {
-    var database: OpaquePointer?
-    guard sqlite3_open(url.path, &database) == SQLITE_OK, let database else {
-        throw UsageImporterError.sqliteOpen("fixture")
-    }
-    defer { sqlite3_close(database) }
-    let data = #"{"role":"assistant","providerID":"opencode","modelID":"free-model","cost":0,"tokens":{"total":110,"input":10,"output":40,"reasoning":10,"cache":{"read":30,"write":20}},"time":{"created":1785585600000,"completed":1785585605000}}"#
-    guard sqlite3_exec(database, "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER, time_updated INTEGER, data TEXT)", nil, nil, nil) == SQLITE_OK else {
-        throw UsageImporterError.sqliteStep("fixture schema")
-    }
-    var statement: OpaquePointer?
-    guard sqlite3_prepare_v2(database, "INSERT INTO message VALUES (?1, ?2, ?3, ?4, ?5)", -1, &statement, nil) == SQLITE_OK,
-          let statement else { throw UsageImporterError.sqlitePrepare("fixture insert") }
-    defer { sqlite3_finalize(statement) }
-    sqlite3_bind_text(statement, 1, "message-1", -1, testSQLiteTransient)
-    sqlite3_bind_text(statement, 2, "session-1", -1, testSQLiteTransient)
-    sqlite3_bind_int64(statement, 3, timestamp("2026-08-01T12:00:00Z"))
-    sqlite3_bind_int64(statement, 4, timestamp("2026-08-01T12:00:01Z"))
-    sqlite3_bind_text(statement, 5, data, -1, testSQLiteTransient)
-    guard sqlite3_step(statement) == SQLITE_DONE else { throw UsageImporterError.sqliteStep("fixture insert") }
-}
-
 private func createLegacyVersionOneDatabase(at url: URL) throws {
     var database: OpaquePointer?
     guard sqlite3_open(url.path, &database) == SQLITE_OK, let database else {
@@ -777,6 +767,17 @@ private func createLegacyVersionOneDatabase(at url: URL) throws {
     """
     guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
         throw UsageImporterError.sqliteStep("legacy fixture")
+    }
+}
+
+private func databaseExecute(at url: URL, sql: String) throws {
+    var database: OpaquePointer?
+    guard sqlite3_open(url.path, &database) == SQLITE_OK, let database else {
+        throw UsageImporterError.sqliteOpen("execute fixture")
+    }
+    defer { sqlite3_close(database) }
+    guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+        throw UsageImporterError.sqliteStep("execute fixture")
     }
 }
 
@@ -816,4 +817,3 @@ private func databaseScalar(at url: URL, sql: String) throws -> Int {
     return Int(sqlite3_column_int64(statement, 0))
 }
 
-private let testSQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

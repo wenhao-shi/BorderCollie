@@ -255,19 +255,23 @@ struct ClaudeUsageClient: Sendable {
         // array is authoritative, so let it overwrite any flat `seven_day_<model>`
         // key for the same model.
         var modelTiers: [String: QuotaTier] = [:]
-        for (model, window) in usageResponse.modelWindows {
+        for (rawModel, window) in usageResponse.modelWindows {
+            let model = ClaudeUsageLimitKind.normalizedModelName(rawModel)
+            guard !model.isEmpty else { continue }
             modelTiers[model] = QuotaTier(
                 name: ClaudeUsageLimitKind.modelWeekTierName(model: model),
                 utilization: window.utilization,
                 resetsAt: Self.normalizedResetsAt(window.resetsAt)
             )
         }
+        // `is_active` is not an enabled flag: it marks the window currently
+        // closest to binding, so a real but non-binding window (including the
+        // account-wide `weekly_all`) reports `false`. Never filter on it.
         for limit in usageResponse.limits {
-            guard limit.kind == "weekly_scoped", limit.isActive != false,
+            guard limit.kind == "weekly_scoped",
                   let percent = limit.percent,
-                  let model = (limit.scope?.model?.displayName ?? limit.scope?.model?.id)?
-                      .lowercased()
-                      .replacingOccurrences(of: " ", with: "_"),
+                  let rawModel = limit.scope?.model?.displayName ?? limit.scope?.model?.id,
+                  case let model = ClaudeUsageLimitKind.normalizedModelName(rawModel),
                   !model.isEmpty
             else {
                 continue

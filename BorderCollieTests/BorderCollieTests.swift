@@ -61,28 +61,6 @@ struct BorderCollieTests {
         )
     }
 
-    @Test func cursorUsageLimitDisplayShowsMonthlyRemainingBuckets() {
-        let quota = SubscriptionQuota(
-            tool: "cursor",
-            credentialStatus: .valid,
-            credentialMessage: nil,
-            success: true,
-            tiers: [
-                QuotaTier(name: "cursor_api", utilization: 0, resetsAt: "2026-07-30T03:12:17Z"),
-                QuotaTier(name: "cursor_auto_composer", utilization: 1.25, resetsAt: "2026-07-30T03:12:17Z"),
-            ],
-            extraUsage: nil,
-            error: nil,
-            queriedAt: nil
-        )
-
-        let limits = CursorUsageLimitDisplay.usageLimits(from: quota)
-
-        #expect(limits.map(\.title) == ["Auto + Composer", "API"])
-        #expect(limits.map(\.percentageText) == ["98.8%", "100%"])
-        #expect(limits.map { $0.resetText(timeZone: TimeZone(secondsFromGMT: 0)!) } == ["Jul 30", "Jul 30"])
-    }
-
     @Test func remainingDisplayPolicyUsesClampedUsedInputAndZeroFallbackForMissingTier() {
         let cases: [(used: Double?, remaining: Double, detailed: String, compact: String)] = [
             (80, 20, "20%", "20%"),
@@ -130,24 +108,6 @@ struct BorderCollieTests {
         #expect(CodexUsageLimitDisplay.compactSummary(from: quota) == "5h: 80% | 7d: 90%")
     }
 
-    @Test func cursorCompactSummaryShowsRemainingUsage() {
-        let quota = SubscriptionQuota(
-            tool: "cursor",
-            credentialStatus: .valid,
-            credentialMessage: nil,
-            success: true,
-            tiers: [
-                QuotaTier(name: "cursor_api", utilization: 40, resetsAt: nil),
-                QuotaTier(name: "cursor_auto_composer", utilization: 5, resetsAt: nil),
-            ],
-            extraUsage: nil,
-            error: nil,
-            queriedAt: nil
-        )
-
-        #expect(CursorUsageLimitDisplay.compactSummary(from: quota) == "Auto: 95% | API: 60%")
-    }
-
     @Test func compactSummaryHandlesMissingClampedAndRoundedRemainingTiers() {
         let codexQuota = SubscriptionQuota(
             tool: "codex",
@@ -161,14 +121,15 @@ struct BorderCollieTests {
             error: nil,
             queriedAt: nil
         )
-        let cursorQuota = SubscriptionQuota(
-            tool: "cursor",
+        let claudeQuota = SubscriptionQuota(
+            tool: "claude_code",
             credentialStatus: .valid,
             credentialMessage: nil,
             success: true,
             tiers: [
-                QuotaTier(name: "cursor_auto_composer", utilization: -2, resetsAt: nil),
-                QuotaTier(name: "cursor_api", utilization: 125, resetsAt: nil),
+                QuotaTier(name: "five_hour", utilization: -2, resetsAt: nil),
+                QuotaTier(name: "seven_day", utilization: 125, resetsAt: nil),
+                QuotaTier(name: "seven_day_fable", utilization: 69.6, resetsAt: nil),
             ],
             extraUsage: nil,
             error: nil,
@@ -176,8 +137,8 @@ struct BorderCollieTests {
         )
 
         #expect(CodexUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
-        #expect(CursorUsageLimitDisplay.compactSummary(from: cursorQuota) == "Auto: 100% | API: 0%")
-        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: --")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: claudeQuota) == "5h: 100% | 7d: 0% | Fable: 30%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: codexQuota) == "5h: 80% | 7d: -- | Fable: --")
     }
 
     @Test func credentialParserRejectsNonChatGPTOAuthMode() {
@@ -298,99 +259,6 @@ struct BorderCollieTests {
         #expect(quota.queriedAt == 1_783_080_000_000)
     }
 
-    @Test func cursorCredentialResolverReadsTokenFromStateDatabase() {
-        let resolver = CursorCredentialResolver(
-            stateDatabaseURL: URL(fileURLWithPath: "/tmp/state.vscdb"),
-            fileExists: { _ in true },
-            databaseReader: { _ in "cursor-token\n" }
-        )
-
-        let credentials = resolver.readCursorCredentials()
-
-        #expect(credentials.status == .valid)
-        #expect(credentials.accessToken == "cursor-token")
-    }
-
-    @Test func cursorUsageClientNormalizesCurrentPeriodUsageResponse() async {
-        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-03T12:00:00Z")!
-        let httpClient = CapturingHTTPClient(
-            statusCode: 200,
-            body:
-            """
-            {
-              "billingCycleStart": "1782807137000",
-              "billingCycleEnd": "1785399137000",
-              "planUsage": {
-                "totalSpend": 55,
-                "includedSpend": 55,
-                "remaining": 6945,
-                "limit": 7000,
-                "autoPercentUsed": 0.1375,
-                "apiPercentUsed": 0,
-                "totalPercentUsed": 0.10784313725490195
-              },
-              "enabled": true,
-              "displayMessage": "You've used 1% of your included usage"
-            }
-            """
-        )
-        let client = CursorUsageClient(
-            httpClient: httpClient,
-            endpoint: URL(string: "https://example.test/cursor")!,
-            now: { now }
-        )
-
-        let quota = await client.queryCursorQuota(accessToken: "cursor-secret")
-
-        #expect(quota.success)
-        #expect(quota.credentialStatus == .valid)
-        #expect(quota.queriedAt == 1_783_080_000_000)
-        #expect(quota.extraUsage == "You've used 1% of your included usage")
-        #expect(quota.tiers == [
-            QuotaTier(name: "cursor_auto_composer", utilization: 0.1375, resetsAt: "2026-07-30T08:12:17Z"),
-            QuotaTier(name: "cursor_api", utilization: 0, resetsAt: "2026-07-30T08:12:17Z"),
-        ])
-
-        let request = await httpClient.lastRequest()
-        #expect(request?.httpMethod == "POST")
-        #expect(request?.httpBody == Data("{}".utf8))
-        #expect(request?.value(forHTTPHeaderField: "Authorization") == "Bearer cursor-secret")
-        #expect(request?.value(forHTTPHeaderField: "Connect-Protocol-Version") == "1")
-        #expect(request?.timeoutInterval == 15)
-    }
-
-    @Test func cursorUsageClientMapsUnauthorizedResponseToExpiredCredentials() async {
-        let httpClient = CapturingHTTPClient(statusCode: 403, body: "{}")
-        let client = CursorUsageClient(
-            httpClient: httpClient,
-            endpoint: URL(string: "https://example.test/cursor")!,
-            now: { Date(timeIntervalSince1970: 1_783_080_000) }
-        )
-
-        let quota = await client.queryCursorQuota(accessToken: "cursor-secret")
-
-        #expect(!quota.success)
-        #expect(quota.credentialStatus == .expired)
-        #expect(quota.error == "Authentication failed. Please sign in to Cursor again. (HTTP 403)")
-        #expect(quota.queriedAt == 1_783_080_000_000)
-    }
-
-    @Test func cursorQuotaServiceMapsMissingCredentials() async {
-        let service = CursorQuotaService(
-            credentialResolver: StubCursorCredentialResolver(
-                credentials: CursorCredentials(accessToken: nil, status: .notFound, message: nil)
-            ),
-            usageClient: CursorUsageClient(
-                httpClient: CapturingHTTPClient(statusCode: 200, body: "{}"),
-                endpoint: URL(string: "https://example.test/cursor")!
-            )
-        )
-
-        let quota = await service.getSubscriptionQuota()
-
-        #expect(quota == .notFound(tool: "cursor"))
-    }
-
 
     @Test func claudeCompactSummaryShowsRemainingUsage() {
         let quota = SubscriptionQuota(
@@ -407,7 +275,7 @@ struct BorderCollieTests {
             queriedAt: nil
         )
 
-        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 52% | 7d: 36%")
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 52% | 7d: 36% | Fable: --")
     }
 
     @Test func claudeCredentialParserReadsValidOAuthToken() {
@@ -648,15 +516,6 @@ struct BorderCollieTests {
                 await probe.leave()
             }
         )
-        let cursorService = StubUsageTrackingService(
-            toolID: "cursor",
-            quota: .notFound(tool: "cursor"),
-            onQuery: {
-                await probe.enter()
-                try? await Task.sleep(for: .milliseconds(50))
-                await probe.leave()
-            }
-        )
         let claudeService = StubUsageTrackingService(
             toolID: "claude_code",
             quota: SubscriptionQuota(
@@ -681,17 +540,16 @@ struct BorderCollieTests {
         let viewModel = MenuBarUsageViewModel(
             agents: [
                 .codex(service: codexService),
-                .cursor(service: cursorService),
                 .claudeCode(service: claudeService),
             ]
         )
 
         await viewModel.refresh()
 
-        #expect(await probe.maxRunningCount() == 3)
-        #expect(viewModel.rows.map(\.title) == ["Codex", "Cursor", "Claude Code"])
-        #expect(viewModel.rows.map(\.detail) == ["5h: 80% | 7d: 90%", "Sign in required", "5h: 52% | 7d: 36%"])
-        #expect(viewModel.rows.map(\.state) == [.success, .unavailable, .success])
+        #expect(await probe.maxRunningCount() == 2)
+        #expect(viewModel.rows.map(\.title) == ["Codex", "Claude Code"])
+        #expect(viewModel.rows.map(\.detail) == ["5h: 80% | 7d: 90%", "5h: 52% | 7d: 36% | Fable: --"])
+        #expect(viewModel.rows.map(\.state) == [.success, .success])
     }
 
     @MainActor
@@ -739,40 +597,40 @@ struct BorderCollieTests {
     @MainActor
     @Test func menuBarViewModelQueriesOnlyEnabledAgentsAndRemovesDisabledRows() async {
         let codexState = CountingUsageServiceState(quota: .notFound(tool: "codex"))
-        let cursorState = CountingUsageServiceState(quota: .notFound(tool: "cursor"))
+        let claudeState = CountingUsageServiceState(quota: .notFound(tool: "claude_code"))
         let viewModel = MenuBarUsageViewModel(
             agents: [
                 .codex(service: CountingUsageTrackingService(toolID: "codex", state: codexState)),
-                .cursor(service: CountingUsageTrackingService(toolID: "cursor", state: cursorState)),
+                .claudeCode(service: CountingUsageTrackingService(toolID: "claude_code", state: claudeState)),
             ]
         )
 
         await viewModel.refresh(enabledAgentIDs: ["codex"])
 
         #expect(await codexState.callCount() == 1)
-        #expect(await cursorState.callCount() == 0)
+        #expect(await claudeState.callCount() == 0)
         #expect(viewModel.rows.map(\.id) == ["codex"])
 
         await viewModel.refresh(enabledAgentIDs: [])
 
         #expect(await codexState.callCount() == 1)
-        #expect(await cursorState.callCount() == 0)
+        #expect(await claudeState.callCount() == 0)
         #expect(viewModel.rows.isEmpty)
 
-        let cursorRefresh = Task { @MainActor in
-            await viewModel.refresh(enabledAgentIDs: ["cursor"])
+        let claudeRefresh = Task { @MainActor in
+            await viewModel.refresh(enabledAgentIDs: ["claude_code"])
         }
         while !viewModel.isRefreshing {
             await Task.yield()
         }
 
-        #expect(viewModel.rows.map(\.id) == ["cursor"])
+        #expect(viewModel.rows.map(\.id) == ["claude_code"])
         #expect(viewModel.rows.map(\.state) == [.loading])
 
-        await cursorRefresh.value
+        await claudeRefresh.value
 
         #expect(await codexState.callCount() == 1)
-        #expect(await cursorState.callCount() == 1)
+        #expect(await claudeState.callCount() == 1)
         #expect(viewModel.rows.map(\.state) == [.unavailable])
     }
 
@@ -1090,6 +948,108 @@ extension BorderCollieTests {
         #expect(limits.map(\.percentageText) == ["52%", "36%", "70%", "88%"])
     }
 
+    @Test func claudeUsageClientFoldsFableVariantsIntoOneFixedWindow() async {
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-11-11T12:00:00Z")!
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": {"utilization": 10.0, "resets_at": "2026-11-11T15:00:00Z"},
+              "seven_day": {"utilization": 20.0, "resets_at": "2026-11-15T06:00:00Z"},
+              "seven_day_fable": {"utilization": 5.0, "resets_at": "2026-11-15T06:00:00Z"},
+              "seven_day_sonnet": {"utilization": 1.0, "resets_at": "2026-11-15T06:00:00Z"},
+              "limits": [
+                {
+                  "kind": "weekly_scoped",
+                  "percent": 40.0,
+                  "resets_at": "2026-11-15T06:00:00Z",
+                  "scope": {"model": {"id": "claude-fable-5-2", "display_name": "Claude Fable 5.2"}}
+                }
+              ]
+            }
+            """
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(quota.tiers.map(\.name) == ["five_hour", "seven_day", "seven_day_fable", "seven_day_sonnet"])
+        #expect(quota.tiers.first { $0.name == "seven_day_fable" }?.utilization == 40.0)
+
+        let limits = ClaudeUsageLimitDisplay.usageLimits(from: quota)
+        #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable", "7d · Sonnet"])
+        #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 90% | 7d: 80% | Fable: 60% | Sonnet: 99%")
+    }
+
+    @Test func claudeUsageClientKeepsNonBindingScopedWindows() async {
+        // Shape captured from the live endpoint: Fable is reported only in
+        // `limits`, with `is_active: false` and an integer percent, while the
+        // flat `seven_day_<model>` keys are null.
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-11-11T22:00:00Z")!
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": {"utilization": 85.0, "resets_at": "2026-11-12T01:19:59.555071+00:00"},
+              "seven_day": {"utilization": 30.0, "resets_at": "2026-11-13T14:59:59.555091+00:00"},
+              "seven_day_opus": null,
+              "seven_day_sonnet": null,
+              "limits": [
+                {"kind": "session", "group": "session", "percent": 85, "resets_at": "2026-11-12T01:19:59.555071+00:00", "scope": null, "is_active": true},
+                {"kind": "weekly_all", "group": "weekly", "percent": 30, "resets_at": "2026-11-13T14:59:59.555091+00:00", "scope": null, "is_active": false},
+                {
+                  "kind": "weekly_scoped", "group": "weekly", "percent": 30,
+                  "resets_at": "2026-11-13T14:59:59.555223+00:00",
+                  "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+                  "is_active": false
+                }
+              ]
+            }
+            """
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(quota.tiers.last == QuotaTier(name: "seven_day_fable", utilization: 30, resetsAt: "2026-11-13T14:59:59Z"))
+        let limits = ClaudeUsageLimitDisplay.usageLimits(from: quota)
+        #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable"])
+        #expect(limits.map(\.percentageText) == ["15%", "70%", "70%"])
+    }
+
+    @Test func claudeUsageLimitsAlwaysListFableWindow() {
+        #expect(ClaudeUsageLimitKind.normalizedModelName("Claude Fable 5.2") == "fable")
+        #expect(ClaudeUsageLimitKind.normalizedModelName("claude-mythos-5-1") == "mythos")
+        #expect(ClaudeUsageLimitKind.normalizedModelName("oauth_apps") == "oauth_apps")
+
+        let quota = SubscriptionQuota(
+            tool: "claude_code",
+            credentialStatus: .valid,
+            credentialMessage: nil,
+            success: true,
+            tiers: [QuotaTier(name: "five_hour", utilization: 48, resetsAt: nil)],
+            extraUsage: nil,
+            error: nil,
+            queriedAt: nil
+        )
+
+        let limits = ClaudeUsageLimitDisplay.usageLimits(from: quota)
+        #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable"])
+        #expect(limits.map(\.percentageText) == ["52%", "--", "--"])
+    }
+
     @Test func resetTextPrecisionFollowsDistanceNotWindowLength() {
         let utc = TimeZone(secondsFromGMT: 0)!
         // A Friday.
@@ -1156,8 +1116,8 @@ extension BorderCollieTests {
         await viewModel.refresh()
 
         let limits = await viewModel.rows.first?.limits ?? []
-        #expect(limits.map(\.title) == ["5h", "7d"])
-        #expect(limits.map(\.percentageText) == ["52%", "36%"])
+        #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable"])
+        #expect(limits.map(\.percentageText) == ["52%", "36%", "--"])
     }
 
     @Test func menuBarRowsHaveNoLimitsWhenQueryFails() async {
@@ -1291,14 +1251,6 @@ private actor CapturingHTTPClient: CodexUsageHTTPClient {
 
     func requestCount() -> Int {
         requests.count
-    }
-}
-
-private struct StubCursorCredentialResolver: CursorCredentialResolving {
-    let credentials: CursorCredentials
-
-    func readCursorCredentials() -> CursorCredentials {
-        credentials
     }
 }
 

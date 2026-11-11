@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension UsageAgent {
-    static let dashboardOrder: [UsageAgent] = [.codex, .claudeCode, .openCode, .pi]
+    static let dashboardOrder: [UsageAgent] = [.codex, .claudeCode]
 
     /// Brand-representative, and the single source for every mark, legend chip,
     /// and callout dot.
@@ -14,8 +14,6 @@ extension UsageAgent {
         switch self {
         case .codex: Color(nsColor: .labelColor)
         case .claudeCode: .orange
-        case .openCode: .blue
-        case .pi: .pink
         }
     }
 
@@ -35,20 +33,6 @@ extension UsageAgent {
         switch self {
         case .claudeCode: .claudeCode
         case .codex: .codex
-        case .openCode: .openCode
-        case .pi: .pi
-        }
-    }
-
-    /// Whether the asset needs a colour applied.
-    ///
-    /// Claude's artwork is authored full-colour. Codex is a template whose
-    /// ambient label colour already *is* its `chartColor`. Only OpenCode and Pi
-    /// are templates wanting a colour that differs from the ambient one.
-    var iconNeedsTint: Bool {
-        switch self {
-        case .claudeCode, .codex: false
-        case .openCode, .pi: true
         }
     }
 }
@@ -57,20 +41,12 @@ extension UsageAgent {
 struct UsageAgentIconView: View {
     let agent: UsageAgent
     var size: CGFloat = 16
-    /// Set `false` inside a `Menu`.
-    ///
-    /// Menu rows bridge to `NSMenuItem.image`, and an icon carrying a
-    /// `foregroundStyle` does not survive that extraction — the row renders with
-    /// no image at all rather than an untinted one. Monochrome template images
-    /// taking the menu's own tint is also the native idiom for menu items.
-    var isTinted = true
 
+    /// Never apply `foregroundStyle` here: inside a `Menu` the row bridges to
+    /// `NSMenuItem.image`, and a styled icon drops out entirely. Claude's art is
+    /// full-colour and Codex is a template whose ambient label colour already is
+    /// its `chartColor`, so no agent needs a tint.
     var body: some View {
-        if isTinted, agent.iconNeedsTint {
-            AgentIconView(icon: agent.icon, size: size)
-                .foregroundStyle(agent.chartColor)
-        } else {
-            AgentIconView(icon: agent.icon, size: size)
-        }
+        AgentIconView(icon: agent.icon, size: size)
     }
 }

@@ -4,7 +4,6 @@ import SwiftUI
 struct AgentUsageMenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(UsageLimitTrackerPreferenceKey.codex) private var tracksCodex = true
-    @AppStorage(UsageLimitTrackerPreferenceKey.cursor) private var tracksCursor = true
     @AppStorage(UsageLimitTrackerPreferenceKey.claudeCode) private var tracksClaudeCode = true
     @StateObject private var viewModel: MenuBarUsageViewModel
 
@@ -121,9 +120,6 @@ struct AgentUsageMenuBarView: View {
         if tracksCodex {
             ids.insert(LiveQuotaTracker.codex.id)
         }
-        if tracksCursor {
-            ids.insert(LiveQuotaTracker.cursor.id)
-        }
         if tracksClaudeCode {
             ids.insert(LiveQuotaTracker.claudeCode.id)
         }
@@ -132,7 +128,6 @@ struct AgentUsageMenuBarView: View {
 
     private func enableAllTrackers() {
         tracksCodex = true
-        tracksCursor = true
         tracksClaudeCode = true
     }
 

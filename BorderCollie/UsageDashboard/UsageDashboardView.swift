@@ -108,7 +108,7 @@ struct UsageDashboardView: View {
                     ContentUnavailableView(
                         "No usage in this period",
                         systemImage: "chart.xyaxis.line",
-                        description: Text("BorderCollie searched local Claude Code, Codex, OpenCode, and Pi histories. Try another period or refresh the index.")
+                        description: Text("BorderCollie searched local Claude Code and Codex histories. Try another period or refresh the index.")
                     )
                     .frame(maxWidth: .infinity, minHeight: 220)
                 } else {
@@ -141,7 +141,7 @@ struct UsageDashboardView: View {
                     Label {
                         Text(agent.displayName)
                     } icon: {
-                        UsageAgentIconView(agent: agent, size: 14, isTinted: false)
+                        UsageAgentIconView(agent: agent, size: 14)
                     }
                 }
             }
@@ -194,7 +194,7 @@ struct UsageDashboardView: View {
             ContentUnavailableView(
                 "No usage loaded",
                 systemImage: "chart.xyaxis.line",
-                description: Text("Refresh to index local Claude Code, Codex, OpenCode, and Pi histories.")
+                description: Text("Refresh to index local Claude Code and Codex histories.")
             )
         }
     }
@@ -451,8 +451,6 @@ private enum UsageDashboardPreviewData {
         let values: [UsageAgent: [Int64]] = [
             .claudeCode: [12_000_000, 18_000_000, 9_000_000, 22_000_000, 31_000_000, 26_000_000, 48_000_000],
             .codex: [7_000_000, 11_000_000, 15_000_000, 13_000_000, 19_000_000, 38_000_000, 29_000_000],
-            .openCode: [2_000_000, 4_000_000, 1_000_000, 6_000_000, 3_000_000, 8_000_000, 5_000_000],
-            .pi: [1_000_000, 2_000_000, 3_000_000, 2_000_000, 5_000_000, 4_000_000, 7_000_000],
         ]
         var daily: [UsageDailyPoint] = []
         var models: [UsageModelBreakdown] = []
@@ -474,7 +472,7 @@ private enum UsageDashboardPreviewData {
                     totalTokens: tokens,
                     estimatedCostNanodollars: tokens * Int64(index + 4),
                     completeEvents: 3,
-                    pricedEvents: agent == .openCode ? 2 : 3
+                    pricedEvents: 3
                 ))
             }
             let agentDaily = daily.filter { $0.agent == agent }
@@ -489,7 +487,7 @@ private enum UsageDashboardPreviewData {
                 totalTokens: agentValues.reduce(0, +),
                 estimatedCostNanodollars: agentValues.enumerated().reduce(0) { $0 + $1.element * Int64($1.offset + 4) },
                 completeEvents: 21,
-                pricedEvents: agent == .openCode ? 14 : 21
+                pricedEvents: 21
             ))
         }
         let total = models.reduce(0) { $0 + $1.totalTokens }
@@ -520,11 +518,11 @@ private enum UsageDashboardPreviewData {
             daily: daily,
             models: models,
             coverage: UsageCoverage(
-                totalEvents: 84,
-                completeEvents: 84,
-                pricedEvents: 77,
+                totalEvents: 42,
+                completeEvents: 42,
+                pricedEvents: 42,
                 partialEvents: 0,
-                unpricedCompleteEvents: 7
+                unpricedCompleteEvents: 0
             )
         )
     }()
@@ -533,8 +531,6 @@ private enum UsageDashboardPreviewData {
         switch agent {
         case .claudeCode: "claude-sonnet-5"
         case .codex: "gpt-5.6-sol"
-        case .openCode: "gateway-model"
-        case .pi: "gpt-5.6-terra"
         }
     }
 }
