@@ -5,8 +5,8 @@ Evaluation Runs adds session/time scoping and active-time accounting. Non-launch
 compile verification and the automated test suites pass, while interactive
 screenshot QA remains pending.
 
-This document defines a local historical usage dashboard for Claude Code,
-Codex, OpenCode, and Pi. It is intentionally separate from the existing
+This document defines a local historical usage dashboard for Claude Code
+and Codex. It is intentionally separate from the existing
 subscription-quota trackers described in `docs/tracker_design.md`.
 
 The dashboard answers a different question from the quota views:
@@ -16,11 +16,13 @@ The dashboard answers a different question from the quota views:
   counterfactual estimate of what that activity would cost at public API rates.
 
 Cursor is outside the dashboard: its local history never provided complete
-accounting data, and its live quota tracker has since been removed.
+accounting data, and its live quota tracker has since been removed. OpenCode and
+Pi were supported until schema v4, which removed them and purges their stored
+rows on upgrade.
 
 ## Product Decisions
 
-- Track exactly four agents: Claude Code, Codex, OpenCode, and Pi.
+- Track exactly two agents: Claude Code and Codex.
 - Add one aggregate `Usage` destination to the existing sidebar-detail window.
 - Keep the existing provider quota destinations and menu-bar quota surface.
 - Use local histories as the usage source; do not query billing APIs for
@@ -37,13 +39,13 @@ accounting data, and its live quota tracker has since been removed.
 - Cost is a token-only counterfactual. It is not a subscription charge or an
   invoice reconstruction.
 - Claude Code uses Anthropic as its fixed pricing authority and Codex uses
-  OpenAI. OpenCode and Pi preserve the provider recorded by each event.
+  OpenAI.
 - Unknown data remains unknown. Missing tokens or prices must not silently
   become zero.
 
 ## Goals
 
-- Compare the four agents over rolling 24-hour, 7-day, and 30-day ranges.
+- Compare the agents over rolling 24-hour, 7-day, and 30-day ranges.
 - Switch the hourly/daily chart between token and API-equivalent cost views.
 - Show totals for every normalized token bucket.
 - Show input cache-hit rate and output share using declared equations.
@@ -194,58 +196,6 @@ timestamp alone is insufficient.
 
 Pricing authority is always `openai`.
 
-### OpenCode
-
-Default source:
-
-```text
-~/.local/share/opencode/opencode.db
-```
-
-Read assistant message records from the provider-owned SQLite database without
-modifying it. Use the message timestamp, `providerID`, `modelID`, `tokens`, and
-source-reported `cost` fields.
-
-Mapping:
-
-| Normalized field | OpenCode field |
-| --- | --- |
-| `in` | `tokens.input` |
-| `cache-write` | `tokens.cache.write` |
-| `cache-read` | `tokens.cache.read` |
-| `out` | `tokens.output + tokens.reasoning` |
-| reasoning detail | `tokens.reasoning` |
-
-OpenCode reports reasoning separately from visible output and includes both in
-`tokens.total`. The adapter therefore adds reasoning into canonical `out`, then
-retains the original reasoning count as subset metadata.
-
-OpenCode's source-reported cost is retained for reconciliation, not substituted
-for the official-price calculation. The stable OpenCode message ID is the
-deduplication identity.
-
-### Pi
-
-Default source:
-
-```text
-~/.pi/agent/sessions/**/session.jsonl
-```
-
-Mapping:
-
-| Normalized field | Pi field |
-| --- | --- |
-| `in` | `usage.input` |
-| `cache-write` | `usage.cacheWrite` |
-| `cache-read` | `usage.cacheRead` |
-| `out` | `usage.output` |
-| reasoning detail | `usage.reasoning` |
-
-Preserve the recorded provider, model, and per-bucket source costs for
-reconciliation. Deduplicate with session identity plus response/message
-identity; use an ordinal only as a versioned fallback for older records.
-
 ## Evaluation Runs
 
 The `Evaluations` destination scopes the historical event store to one model
@@ -278,9 +228,7 @@ The source boundary quality is explicit:
 | Source | Start | End | Quality |
 | --- | --- | --- | --- |
 | Codex | `event_msg.task_started` | `event_msg.task_complete` | exact |
-| OpenCode | assistant `time.created` | assistant `time.completed` | exact |
 | Claude Code | human `user` message timestamp | terminal assistant message whose `stop_reason` is not `tool_use` | inferred |
-| Pi | human `user` message timestamp | terminal assistant message whose `stopReason` is not `toolUse` | inferred |
 
 Synthetic tool-result/user records do not open a new human turn. An unfinished
 turn is kept in the incremental checkpoint state but contributes no duration
@@ -384,14 +332,6 @@ For append-only JSONL sources:
    version changed.
 5. Upsert by stable source identity inside a transaction.
 6. Advance the checkpoint only after the transaction commits.
-
-For OpenCode SQLite:
-
-1. Open the provider database read-only.
-2. Query records newer than the stored message/time high-water mark while also
-   allowing stable-ID upserts at the boundary.
-3. Commit normalized events and the checkpoint atomically in BorderCollie's
-   database.
 
 Cancellation must leave the prior checkpoint intact. A full **Rebuild Index**
 operation may be added later as a recoverable maintenance action, but normal
@@ -665,8 +605,6 @@ BorderCollie/UsageDashboard/
   UsageSourceImporter.swift
   ClaudeCodeUsageImporter.swift
   CodexHistoryUsageImporter.swift
-  OpenCodeUsageImporter.swift
-  PiUsageImporter.swift
   UsagePricingCatalog.swift
   UsageAggregator.swift
   UsageDashboardModel.swift

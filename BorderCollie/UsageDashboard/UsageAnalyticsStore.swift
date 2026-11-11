@@ -9,7 +9,7 @@ enum UsageAnalyticsStoreError: Error, Equatable {
 }
 
 actor UsageAnalyticsStore {
-    static let schemaVersion = 3
+    static let schemaVersion = 4
 
     private let database: OpaquePointer
 
@@ -532,6 +532,29 @@ actor UsageAnalyticsStore {
             try execute(database, "CREATE INDEX IF NOT EXISTS usage_event_session_time ON usage_event(session_key, occurred_at_ms)")
             try execute(database, "PRAGMA user_version = 3")
         }
+        if version <= 3 {
+            // v4: OpenCode and Pi support was removed. Their rows would no
+            // longer decode into `UsageAgent`, so purge them rather than let one
+            // stale row fail every read.
+            for table in ["usage_event", "usage_active_turn", "import_checkpoint"]
+            where tableHasColumn(database, table: table, column: "agent") {
+                try execute(database, "DELETE FROM \(table) WHERE agent IN ('opencode', 'pi')")
+            }
+            try execute(database, "PRAGMA user_version = 4")
+        }
+    }
+
+    private static func tableHasColumn(_ database: OpaquePointer, table: String, column: String) -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 1), String(cString: name) == column {
+                return true
+            }
+        }
+        return false
     }
 
     private static func createEvaluationSchema(_ database: OpaquePointer) throws {

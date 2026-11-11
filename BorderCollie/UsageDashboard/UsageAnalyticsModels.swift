@@ -3,8 +3,6 @@ import Foundation
 enum UsageAgent: String, CaseIterable, Codable, Sendable {
     case claudeCode = "claude_code"
     case codex
-    case openCode = "opencode"
-    case pi
 
     var displayName: String {
         switch self {
@@ -12,10 +10,6 @@ enum UsageAgent: String, CaseIterable, Codable, Sendable {
             "Claude Code"
         case .codex:
             "Codex"
-        case .openCode:
-            "OpenCode"
-        case .pi:
-            "Pi"
         }
     }
 }

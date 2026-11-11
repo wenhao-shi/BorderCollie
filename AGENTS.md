@@ -59,7 +59,7 @@
 - `BorderCollie/UsageDashboard/UsageAnalyticsStore.swift`: actor-isolated local
   SQLite schema, transactions, checkpoints, and range reads.
 - `BorderCollie/UsageDashboard/UsageImporters.swift`: incremental Claude Code,
-  Codex, OpenCode, and Pi history importers.
+  and Codex history importers.
 - `BorderCollie/UsageDashboard/UsagePricing.swift`: model aliases and
   effective-dated official token pricing.
 - `BorderCollie/UsageDashboard/UsageAnalyticsBackend.swift`: import, repricing,
@@ -163,7 +163,8 @@ are prepared for the app UI to launch.
 ## Historical Usage Backend Standard
 
 - Keep historical analytics separate from `SubscriptionQuota` and quota polling.
-- Track Claude Code, Codex, OpenCode, and Pi; Cursor is not a historical source.
+- Track Claude Code and Codex only; Cursor, OpenCode, and Pi are not
+  historical sources. Schema v4 purges any stored OpenCode/Pi rows.
 - Preserve disjoint `in`, `cache-write`, `cache-read`, and `out` buckets;
   reasoning is a subset of `out`.
 - Store partial events but exclude them from complete-token and cost totals.
@@ -182,7 +183,7 @@ are prepared for the app UI to launch.
   session key; they do not include subscription-quota utilization.
 - Active time spans human submission through terminal agent completion,
   including tools and waits but excluding the following human idle gap.
-- Codex/OpenCode timing is exact from explicit source markers; Claude Code/Pi
+- Codex timing is exact from explicit source markers; Claude Code
   timing is inferred from message boundaries and must stay labeled as inferred.
 - Merge overlapping intervals within each session before adding Agent time;
   union all selected-session intervals for Effective wall time.
@@ -397,6 +398,16 @@ are prepared for the app UI to launch.
   key, tests) keeps Live quota and the menu bar to providers with real quota.
   A stale `usageLimitTracker.cursor.isEnabled` default may linger in user
   defaults; nothing reads it.
+
+### Decision: OpenCode and Pi history support removed
+
+- Context: only Claude Code and Codex are in use; the other two importers
+  added a SQLite reader, two agent cases, and icons for no data.
+- Alternatives considered: keep the importers but hide the agents in the UI.
+- Rationale: removing `UsageAgent.openCode`/`.pi` keeps every agent switch
+  honest. Stored rows with those agents would no longer decode, so the v3→v4
+  store migration deletes them from `usage_event`, `usage_active_turn`, and
+  `import_checkpoint` instead of letting one stale row fail every read.
 
 ### Decision: Fable weekly window is pinned for Claude Code
 

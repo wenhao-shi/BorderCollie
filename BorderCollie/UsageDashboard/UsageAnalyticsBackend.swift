@@ -329,8 +329,6 @@ actor UsageAnalyticsBackend {
         importers: [any UsageSourceImporter] = [
             ClaudeCodeUsageImporter(),
             CodexUsageImporter(),
-            OpenCodeUsageImporter(),
-            PiUsageImporter(),
         ],
         pricingEngine: UsagePricingEngine = UsagePricingEngine()
     ) {

@@ -25,7 +25,7 @@ layers, and never passed into SwiftUI views.
 - Preview-safe SwiftUI surfaces that do not read credentials or call networks.
 - Swift Testing coverage for credential parsing, API normalization, display
   formatting, compact menu-bar summaries, and failure mapping.
-- A local historical usage dashboard for Claude Code, Codex, OpenCode, and Pi
+- A local historical usage dashboard for Claude Code and Codex
   with rolling 24-hour, 7-day, and 30-day periods, hourly/daily token and cost
   charts, normalized metrics, and detailed model/day token breakdowns.
 - Evaluation Runs that bracket a live task or select a past interval, include
@@ -95,7 +95,6 @@ Historical analytics backend (separate from subscription quota)
   UsageAnalyticsBackend
   UsageAnalyticsStore
   ClaudeCodeUsageImporter / CodexUsageImporter
-  OpenCodeUsageImporter / PiUsageImporter
   UsagePricingEngine / UsageAggregator
 
 Historical analytics UI
