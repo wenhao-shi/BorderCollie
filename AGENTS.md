@@ -275,6 +275,16 @@ are prepared for the app UI to launch.
   Claude Code Keychain/`~/.claude/.credentials.json`, and remote usage calls
   when changing signing or sandbox settings.
 
+### Symptom: Claude Code `7d · Fable` shows `--` on a Fable plan
+
+- Root cause: the live response reports Fable only in `limits` (flat
+  `seven_day_<model>` keys are `null`), and that entry carries
+  `is_active: false`. `is_active` marks the window currently closest to
+  binding (`weekly_all` is `false` too), not whether the limit exists.
+- Fix: never filter `limits` entries on `is_active`.
+- Prevention: `claudeUsageClientKeepsNonBindingScopedWindows` pins the captured
+  response shape.
+
 ### Symptom: Claude Code shows two Fable (or Opus/Sonnet) weekly rows
 
 - Root cause: the usage API names the same model-scoped window differently in

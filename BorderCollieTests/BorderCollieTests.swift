@@ -987,6 +987,48 @@ extension BorderCollieTests {
         #expect(ClaudeUsageLimitDisplay.compactSummary(from: quota) == "5h: 90% | 7d: 80% | Fable: 60% | Sonnet: 99%")
     }
 
+    @Test func claudeUsageClientKeepsNonBindingScopedWindows() async {
+        // Shape captured from the live endpoint: Fable is reported only in
+        // `limits`, with `is_active: false` and an integer percent, while the
+        // flat `seven_day_<model>` keys are null.
+        let now = ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-11-11T22:00:00Z")!
+        let httpClient = CapturingHTTPClient(
+            statusCode: 200,
+            body:
+            """
+            {
+              "five_hour": {"utilization": 85.0, "resets_at": "2026-11-12T01:19:59.555071+00:00"},
+              "seven_day": {"utilization": 30.0, "resets_at": "2026-11-13T14:59:59.555091+00:00"},
+              "seven_day_opus": null,
+              "seven_day_sonnet": null,
+              "limits": [
+                {"kind": "session", "group": "session", "percent": 85, "resets_at": "2026-11-12T01:19:59.555071+00:00", "scope": null, "is_active": true},
+                {"kind": "weekly_all", "group": "weekly", "percent": 30, "resets_at": "2026-11-13T14:59:59.555091+00:00", "scope": null, "is_active": false},
+                {
+                  "kind": "weekly_scoped", "group": "weekly", "percent": 30,
+                  "resets_at": "2026-11-13T14:59:59.555223+00:00",
+                  "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+                  "is_active": false
+                }
+              ]
+            }
+            """
+        )
+        let client = ClaudeUsageClient(
+            httpClient: httpClient,
+            endpoint: URL(string: "https://example.test/oauth/usage")!,
+            requestGate: ClaudeUsageRequestGate(),
+            now: { now }
+        )
+
+        let quota = await client.queryClaudeQuota(accessToken: "claude-secret")
+
+        #expect(quota.tiers.last == QuotaTier(name: "seven_day_fable", utilization: 30, resetsAt: "2026-11-13T14:59:59Z"))
+        let limits = ClaudeUsageLimitDisplay.usageLimits(from: quota)
+        #expect(limits.map(\.title) == ["5h", "7d", "7d · Fable"])
+        #expect(limits.map(\.percentageText) == ["15%", "70%", "70%"])
+    }
+
     @Test func claudeUsageLimitsAlwaysListFableWindow() {
         #expect(ClaudeUsageLimitKind.normalizedModelName("Claude Fable 5.2") == "fable")
         #expect(ClaudeUsageLimitKind.normalizedModelName("claude-mythos-5-1") == "mythos")

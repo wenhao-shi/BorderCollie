@@ -264,8 +264,11 @@ struct ClaudeUsageClient: Sendable {
                 resetsAt: Self.normalizedResetsAt(window.resetsAt)
             )
         }
+        // `is_active` is not an enabled flag: it marks the window currently
+        // closest to binding, so a real but non-binding window (including the
+        // account-wide `weekly_all`) reports `false`. Never filter on it.
         for limit in usageResponse.limits {
-            guard limit.kind == "weekly_scoped", limit.isActive != false,
+            guard limit.kind == "weekly_scoped",
                   let percent = limit.percent,
                   let rawModel = limit.scope?.model?.displayName ?? limit.scope?.model?.id,
                   case let model = ClaudeUsageLimitKind.normalizedModelName(rawModel),
