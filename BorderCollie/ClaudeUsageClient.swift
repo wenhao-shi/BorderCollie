@@ -21,6 +21,25 @@ struct ClaudeUsageClient: Sendable {
         self.now = now
     }
 
+    /// The quota the gate would serve right now, or nil when a network fetch is
+    /// due. Lets callers skip the credential read on throttled polls.
+    func throttledQuota() async -> SubscriptionQuota? {
+        switch await requestGate.decision(now: now()) {
+        case .serveCached(let cached):
+            cached
+        case .allowNetwork:
+            nil
+        }
+    }
+
+    /// Runs `operation` unless another Claude query is already in flight, in
+    /// which case it waits for and shares that query's result.
+    func singleFlight(
+        _ operation: @escaping @Sendable () async -> SubscriptionQuota
+    ) async -> SubscriptionQuota {
+        await requestGate.singleFlight(operation)
+    }
+
     /// Queries usage with automatic OAuth refresh.
     ///
     /// The stored access token is short-lived and only the CLI renews it, so a

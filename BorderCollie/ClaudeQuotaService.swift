@@ -23,6 +23,18 @@ struct ClaudeQuotaService: UsageTrackingService {
     }
 
     func getSubscriptionQuota() async -> SubscriptionQuota {
+        await usageClient.singleFlight { [self] in
+            await resolveAndQuery()
+        }
+    }
+
+    private func resolveAndQuery() async -> SubscriptionQuota {
+        // Most polls land inside the gate's minimum interval or a 429 cooldown
+        // and will be answered from cache, so don't touch the keychain for them.
+        if let throttled = await usageClient.throttledQuota() {
+            return throttled
+        }
+
         let credentials = credentialResolver.readClaudeCredentials()
 
         switch credentials.status {

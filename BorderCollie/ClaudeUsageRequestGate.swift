@@ -15,6 +15,7 @@ actor ClaudeUsageRequestGate {
     private var lastSuccessfulQuota: SubscriptionQuota?
     private var lastNetworkFetchAt: Date?
     private var rateLimitedUntil: Date?
+    private var inFlight: Task<SubscriptionQuota, Never>?
 
     enum Decision: Equatable {
         case serveCached(SubscriptionQuota)
@@ -44,6 +45,27 @@ actor ClaudeUsageRequestGate {
         }
 
         return .allowNetwork
+    }
+
+    /// Joins an in-flight Claude query instead of starting a second one.
+    ///
+    /// The window and the menu bar poll independently, and `decision(now:)` is
+    /// checked before the request goes out, so two callers arriving together
+    /// would both be allowed onto the network (and both read the keychain).
+    /// That is exactly what happens when both were held up by the same stall,
+    /// and a doubled request is what earns a 429 and a five-minute cooldown.
+    func singleFlight(
+        _ operation: @escaping @Sendable () async -> SubscriptionQuota
+    ) async -> SubscriptionQuota {
+        if let inFlight {
+            return await inFlight.value
+        }
+
+        let task = Task { await operation() }
+        inFlight = task
+        let quota = await task.value
+        inFlight = nil
+        return quota
     }
 
     func recordSuccess(_ quota: SubscriptionQuota, at now: Date) {

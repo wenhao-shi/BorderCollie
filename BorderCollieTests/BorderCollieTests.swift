@@ -491,6 +491,83 @@ struct BorderCollieTests {
         #expect(quota == .notFound(tool: "claude_code"))
     }
 
+    @Test func claudeQuotaServiceSkipsCredentialReadWhileGateServesCache() async {
+        let clock = ClaudeTestClock(ISO8601DateFormatter.codexWithoutFractionalSeconds.date(from: "2026-07-27T12:00:00Z")!)
+        let resolver = CountingClaudeCredentialResolver(
+            credentials: ClaudeCredentials(accessToken: "claude-secret", status: .valid, message: nil)
+        )
+        let http = CapturingHTTPClient(
+            statusCode: 200,
+            body: #"{"five_hour": { "utilization": 10.0, "resets_at": "2026-07-27T17:00:00Z" }}"#
+        )
+        let service = ClaudeQuotaService(
+            credentialResolver: resolver,
+            usageClient: ClaudeUsageClient(
+                httpClient: http,
+                endpoint: URL(string: "https://example.test/oauth/usage")!,
+                requestGate: ClaudeUsageRequestGate(),
+                now: { clock.now() }
+            ),
+            now: { clock.now() }
+        )
+
+        let first = await service.getSubscriptionQuota()
+        clock.advance(seconds: 30)
+        let second = await service.getSubscriptionQuota()
+
+        #expect(first.success)
+        #expect(second == first)
+        #expect(resolver.readCount() == 1)
+        #expect(await http.requestCount() == 1)
+    }
+
+    @Test func claudeQuotaServiceSharesConcurrentQueries() async {
+        let resolver = CountingClaudeCredentialResolver(
+            credentials: ClaudeCredentials(accessToken: "claude-secret", status: .valid, message: nil)
+        )
+        let http = CapturingHTTPClient(
+            statusCode: 200,
+            body: #"{"five_hour": { "utilization": 10.0, "resets_at": "2026-07-27T17:00:00Z" }}"#
+        )
+        let service = ClaudeQuotaService(
+            credentialResolver: resolver,
+            usageClient: ClaudeUsageClient(
+                httpClient: http,
+                endpoint: URL(string: "https://example.test/oauth/usage")!,
+                requestGate: ClaudeUsageRequestGate()
+            )
+        )
+
+        async let window = service.getSubscriptionQuota()
+        async let menuBar = service.getSubscriptionQuota()
+        let results = await [window, menuBar]
+
+        #expect(results.allSatisfy { $0.success })
+        #expect(resolver.readCount() == 1)
+        #expect(await http.requestCount() == 1)
+    }
+
+    @Test func usageQuotaQueryTimesOutWhileProviderIsBlocked() async {
+        let service = BlockingUsageTrackingService(toolID: "claude_code", blockSeconds: 3)
+        let started = Date()
+
+        let result = await UsageQuotaQuery.query(service: service, timeout: .milliseconds(100))
+
+        #expect(result == .failure(.timedOut))
+        #expect(Date().timeIntervalSince(started) < 2)
+    }
+
+    @Test func claudeKeychainWriteCommandHexEncodesTheDocument() {
+        let document = #"{"claudeAiOauth":{"accessToken":"a b\"c"}}"#
+        let command = ClaudeCredentialResolver.addGenericPasswordCommand(account: "mason", document: document)
+        let hex = Data(document.utf8).map { String(format: "%02x", $0) }.joined()
+
+        #expect(command == "add-generic-password -U -a \"mason\" -s \"Claude Code-credentials\" -X \(hex)\n")
+        #expect(command?.contains("accessToken") == false)
+        #expect(ClaudeCredentialResolver.addGenericPasswordCommand(account: "ma\"son", document: document) == nil)
+        #expect(ClaudeCredentialResolver.addGenericPasswordCommand(account: "", document: document) == nil)
+    }
+
     @MainActor
     @Test func menuBarViewModelRefreshesAgentsConcurrentlyInFixedOrder() async {
 
@@ -1260,6 +1337,45 @@ private struct StubClaudeCredentialResolver: ClaudeCredentialResolving {
     func readClaudeCredentials() -> ClaudeCredentials {
         credentials
     }
+}
+
+private final class CountingClaudeCredentialResolver: ClaudeCredentialResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private let credentials: ClaudeCredentials
+    private var reads = 0
+
+    init(credentials: ClaudeCredentials) {
+        self.credentials = credentials
+    }
+
+    func readClaudeCredentials() -> ClaudeCredentials {
+        lock.lock()
+        defer { lock.unlock() }
+        reads += 1
+        return credentials
+    }
+
+    func readCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
+}
+
+/// Blocks its thread synchronously, like a keychain call waiting on a modal
+/// prompt, so it cannot observe cancellation.
+private struct BlockingUsageTrackingService: UsageTrackingService {
+    let toolID: String
+    let blockSeconds: TimeInterval
+
+    func getSubscriptionQuota() async -> SubscriptionQuota {
+        blockCurrentThread(seconds: blockSeconds)
+        return .notFound(tool: toolID)
+    }
+}
+
+private func blockCurrentThread(seconds: TimeInterval) {
+    Thread.sleep(forTimeInterval: seconds)
 }
 
 private struct StubUsageTrackingService: UsageTrackingService {

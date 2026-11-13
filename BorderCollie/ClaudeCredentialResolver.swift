@@ -285,42 +285,109 @@ struct ClaudeCredentialResolver: ClaudeCredentialResolving, ClaudeCredentialPers
             .appendingPathComponent(".credentials.json")
     }
 
+    // MARK: - Keychain access
+    //
+    // Every secret read and write goes through `/usr/bin/security`, never the
+    // Security framework. Claude Code itself maintains this item with the
+    // `security` tool, so the item's ACL trusts `/usr/bin/security` and its
+    // partition list is `apple-tool:`. Each time Claude Code rewrites the item
+    // (on every token refresh it does) the partition list is reset to
+    // `apple-tool:` alone, which silently revokes any "Always Allow" granted to
+    // BorderCollie. A framework read from this app then raises a modal
+    // password prompt, and `SecItemCopyMatching` blocks its thread until the
+    // user answers — `kSecUseAuthenticationUIFail` does not suppress that
+    // prompt on the file-based login keychain. Going through `security` sees
+    // the same trust Claude Code relies on, so it never prompts.
+
     nonisolated static func readClaudeCredentialsFromKeychain() -> String? {
-        if let value = readKeychainItemViaSecurityFramework() {
-            return value
+        guard let result = runSecurity(
+            arguments: ["find-generic-password", "-s", keychainServiceName, "-w"],
+            timeout: keychainTimeoutSeconds
+        ), result.status == 0 else {
+            return nil
         }
 
-        return readKeychainItemViaSecurityCLI()
+        return String(data: result.output, encoding: .utf8)
     }
 
-    private nonisolated static func readKeychainItemViaSecurityFramework() -> String? {
+    /// Updates the existing item in place with `security add-generic-password
+    /// -U`, the same way Claude Code writes it. The command is fed through
+    /// `security -i` on stdin with the document hex-encoded (`-X`), so the
+    /// refresh token never appears in `argv`, where `ps` would expose it.
+    nonisolated static func writeClaudeCredentialsToKeychain(_ document: String) -> Bool {
+        // `-U` without the right account would add a second item instead of
+        // updating Claude Code's, so take the account from the existing item.
+        // Reading attributes (not the secret) never prompts.
+        guard let account = keychainItemAccount(),
+              let command = addGenericPasswordCommand(account: account, document: document)
+        else {
+            return false
+        }
+
+        guard let result = runSecurity(
+            arguments: ["-i"],
+            input: Data(command.utf8),
+            timeout: keychainWriteTimeoutSeconds
+        ), result.status == 0 else {
+            return false
+        }
+
+        // `security -i` can exit 0 even when the command inside it failed, so
+        // confirm the write by reading it back.
+        guard let stored = readClaudeCredentialsFromKeychain() else {
+            return false
+        }
+        let normalized = decodeHexEncodedJSON(stored) ?? stored
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+            == document.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The `security -i` command line that rewrites the item. Returns nil when
+    /// the account cannot be quoted safely for `security`'s line parser.
+    nonisolated static func addGenericPasswordCommand(account: String, document: String) -> String? {
+        let unquotable: Set<Character> = ["\"", "\\", "\n", "\r"]
+        guard !account.isEmpty, !account.contains(where: unquotable.contains) else {
+            return nil
+        }
+
+        let hex = Data(document.utf8).map { String(format: "%02x", $0) }.joined()
+        return "add-generic-password -U -a \"\(account)\" -s \"\(keychainServiceName)\" -X \(hex)\n"
+    }
+
+    private nonisolated static func keychainItemAccount() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainServiceName,
-            kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
 
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data
+              let attributes = item as? [String: Any]
         else {
             return nil
         }
 
-        return String(data: data, encoding: .utf8)
+        return attributes[kSecAttrAccount as String] as? String
     }
 
-    /// Fallback for keychain items whose ACL already trusts `/usr/bin/security`
-    /// but not this app.
-    private nonisolated static func readKeychainItemViaSecurityCLI() -> String? {
+    private static let keychainWriteTimeoutSeconds = 5.0
+
+    private nonisolated static func runSecurity(
+        arguments: [String],
+        input: Data? = nil,
+        timeout: TimeInterval
+    ) -> (status: Int32, output: Data)? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", keychainServiceName, "-w"]
+        process.arguments = arguments
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = Pipe()
+        let inputPipe = input.map { _ in Pipe() }
+        process.standardInput = inputPipe ?? FileHandle.nullDevice
 
         let finished = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in
@@ -333,30 +400,18 @@ struct ClaudeCredentialResolver: ClaudeCredentialResolving, ClaudeCredentialPers
             return nil
         }
 
-        guard finished.wait(timeout: .now() + keychainTimeoutSeconds) == .success else {
+        if let input, let inputPipe {
+            inputPipe.fileHandleForWriting.write(input)
+            try? inputPipe.fileHandleForWriting.close()
+        }
+
+        guard finished.wait(timeout: .now() + timeout) == .success else {
             process.terminate()
             return nil
         }
 
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-
         let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: output, encoding: .utf8)
-    }
-
-    /// Updates the existing item in place via the Security framework. The
-    /// `security` CLI is deliberately not used for writes: it would put the
-    /// refresh token in `argv`, where any local process can read it from `ps`.
-    nonisolated static func writeClaudeCredentialsToKeychain(_ document: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainServiceName,
-        ]
-        let attributes: [String: Any] = [kSecValueData as String: Data(document.utf8)]
-
-        return SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecSuccess
+        return (process.terminationStatus, output)
     }
 }
 
