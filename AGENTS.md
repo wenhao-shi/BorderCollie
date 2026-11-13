@@ -233,6 +233,28 @@ are prepared for the app UI to launch.
 - Prevention: do not poll the Claude OAuth usage endpoint more often than
   about once every 60 seconds across the app window and menu bar.
 
+### Symptom: Keychain password prompt keeps returning and quota stalls
+
+- Root cause: Claude Code maintains `Claude Code-credentials` with
+  `/usr/bin/security`, and its rewrites (every CLI token refresh) leave the
+  item's partition list at `apple-tool:` only. That silently revokes any
+  "Always Allow" given to BorderCollie, so a Security-framework read prompts
+  again. `SecItemCopyMatching` blocks its thread until the prompt is answered
+  (`kSecUseAuthenticationUIFail` does not suppress it on the login keychain,
+  and the dialog outlives a killed caller). The old task-group timeout could
+  not fire past a blocked child, so the window and the whole menu bar
+  (Codex included) froze for the dialog's lifetime. Both pollers then fetched
+  together, which risked a 429 and a 5-minute cooldown.
+- Fix: read and write the item only through `/usr/bin/security`. Writes go
+  through `security -i` on stdin with `-X <hex>`, so the token stays out of
+  `argv`. Look up the account with an attributes-only query, which never
+  prompts. `UsageQuotaQuery` abandons a stuck provider at its deadline.
+  `ClaudeQuotaService` checks the gate before touching the keychain and is
+  single-flight through `ClaudeUsageRequestGate.singleFlight`.
+- Prevention: never read a third-party CLI's keychain secret with
+  `SecItemCopyMatching` from a background poller. Inspect an item's trust with
+  `security dump-keychain -a` (look at `partition_id` and `applications`).
+
 ### Symptom: `RuleMark` chain fails with "no member 'lineStyle'" on `some Chart3DContent`
 
 - Root cause: on macOS 26 `RuleMark` conforms to both `ChartContent` and
