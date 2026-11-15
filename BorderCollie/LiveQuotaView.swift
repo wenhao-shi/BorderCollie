@@ -326,14 +326,20 @@ struct LiveQuotaView: View {
                     .frame(minWidth: 104, alignment: .leading)
             }
 
-            ProgressView(value: limit.remainingPercentage, total: 100)
-                .tint(limit.remainingPercentage.quotaTint)
-                .animation(.smooth(duration: 0.28), value: limit.remainingPercentage)
+            QuotaProgressBar(limit: limit)
         }
         .padding(.vertical, UsageDesign.Spacing.tight)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(limit.title)
-        .accessibilityValue("\(limit.percentageText) remaining, \(UsageLimitDisplay.resetLabel(for: limit))")
+        .accessibilityValue(accessibilityValue(for: limit))
+    }
+
+    private func accessibilityValue(for limit: UsageLimitDisplay) -> String {
+        var value = "\(limit.percentageText) remaining, \(UsageLimitDisplay.resetLabel(for: limit))"
+        if let timeRemaining = limit.timeRemainingPercentage() {
+            value += ", \(QuotaProgressBar.helpText(timeRemaining: timeRemaining))"
+        }
+        return value
     }
 
     /// Per-provider recovery. The toolbar's Refresh covers all three, but a

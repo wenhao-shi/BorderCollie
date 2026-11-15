@@ -83,6 +83,30 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
         UsageResetFormatting.text(forResetsAt: resetsAt, now: now, timeZone: timeZone)
     }
 
+    /// Share of the window's wall-clock time still to run, on the same
+    /// "remaining" scale as `remainingPercentage`, so the two can share one
+    /// bar: quota remaining above this mark means usage is under an even pace.
+    ///
+    /// Nil when the window length or reset time is unknown, or when the reset
+    /// has already passed (the tier is stale until the next refresh) — no mark
+    /// beats a wrong one.
+    func timeRemainingPercentage(now: Date = Date()) -> Double? {
+        guard
+            let tier,
+            let length = QuotaWindowLength.duration(forTierName: tier.name),
+            let resetsAt,
+            let resetDate = ISO8601DateFormatter.codex.dateAllowingCodexFormats(from: resetsAt)
+        else {
+            return nil
+        }
+
+        let remaining = resetDate.timeIntervalSince(now)
+        guard remaining > 0 else {
+            return nil
+        }
+        return min(remaining / length, 1) * 100
+    }
+
     /// The user-facing reset phrase. The window and the menu bar lay their rows
     /// out differently but must never word this differently, so it lives on the
     /// model rather than in either view.
@@ -100,6 +124,31 @@ struct UsageLimitDisplay: Identifiable, Equatable, Sendable {
         return "resets \(reset)"
     }
 
+}
+
+/// Nominal window length, recovered from the normalized tier name. Neither
+/// provider's tier carries a duration, but every tier name encodes one:
+/// `five_hour`, `seven_day`, Claude's model-scoped `seven_day_<model>`, and
+/// Codex's generic `<n>_hour` / `<n>_day` fallback.
+enum QuotaWindowLength {
+    static func duration(forTierName name: String) -> TimeInterval? {
+        if name == "five_hour" {
+            return 5 * 3_600
+        }
+        if name == "seven_day" || ClaudeUsageLimitKind.modelName(fromTierName: name) != nil {
+            return 7 * 86_400
+        }
+
+        let parts = name.split(separator: "_")
+        guard parts.count == 2, let count = Int(parts[0]), count > 0 else {
+            return nil
+        }
+        switch parts[1] {
+        case "hour": return TimeInterval(count * 3_600)
+        case "day": return TimeInterval(count * 86_400)
+        default: return nil
+        }
+    }
 }
 
 enum CodexUsageLimitKind: String, CaseIterable, Identifiable, Sendable {
