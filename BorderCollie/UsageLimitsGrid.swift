@@ -34,9 +34,8 @@ struct UsageLimitsGrid: View {
 
                 if showsProgressBars {
                     GridRow {
-                        ProgressView(value: limit.remainingPercentage, total: 100)
+                        QuotaProgressBar(limit: limit)
                             .controlSize(.small)
-                            .tint(limit.remainingPercentage.quotaTint)
                             .gridCellColumns(3)
                             .padding(.bottom, 4)
                     }

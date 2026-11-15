@@ -83,6 +83,31 @@ struct BorderCollieTests {
         }
     }
 
+    @Test func paceMarkTracksWindowTimeRemaining() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func limit(_ name: String, resetIn seconds: TimeInterval?) -> UsageLimitDisplay {
+            let resetsAt = seconds.map { ISO8601DateFormatter().string(from: now.addingTimeInterval($0)) }
+            return UsageLimitDisplay(
+                id: name,
+                title: name,
+                tier: QuotaTier(name: name, utilization: 10, resetsAt: resetsAt)
+            )
+        }
+
+        // 1h of a 5h window left → 20%; 3.5d of a 7d window → 50%.
+        #expect(limit("five_hour", resetIn: 3_600).timeRemainingPercentage(now: now) == 20)
+        #expect(limit("seven_day", resetIn: 3.5 * 86_400).timeRemainingPercentage(now: now) == 50)
+        #expect(limit("seven_day_fable", resetIn: 1.75 * 86_400).timeRemainingPercentage(now: now) == 25)
+        #expect(limit("2_day", resetIn: 86_400).timeRemainingPercentage(now: now) == 50)
+        // Clock skew past the window length clamps to a full window.
+        #expect(limit("five_hour", resetIn: 6 * 3_600).timeRemainingPercentage(now: now) == 100)
+        // Already reset, unknown reset, unknown window, or missing tier: no mark.
+        #expect(limit("five_hour", resetIn: -60).timeRemainingPercentage(now: now) == nil)
+        #expect(limit("five_hour", resetIn: nil).timeRemainingPercentage(now: now) == nil)
+        #expect(limit("unknown", resetIn: 3_600).timeRemainingPercentage(now: now) == nil)
+        #expect(UsageLimitDisplay(id: "x", title: "x", tier: nil).timeRemainingPercentage(now: now) == nil)
+    }
+
     @Test func remainingQuotaTintUsesExactWarningBoundaries() {
         #expect(25.0.quotaTint == .orange)
         #expect(10.0.quotaTint == .red)

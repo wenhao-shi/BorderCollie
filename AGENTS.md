@@ -125,9 +125,20 @@ are prepared for the app UI to launch.
   `Claude Code 5h: 52% | 7d: 36% | Fable: 70%`.
 - Claude Code always lists `5h`, `7d`, and `7d · Fable` (missing → `--`), then
   any other model-scoped weekly windows the API reports.
-- Use native SwiftUI `ProgressView` bars, tinted by `Double.quotaTint` so a bar
-  near its limit reads differently from an idle one. Colour only reinforces the
-  percentage text; it is never the sole channel.
+- Quota bars are `QuotaProgressBar` (shared by window and menu bar), a drawn
+  bar rather than a native `ProgressView`, because it shows two values on one
+  line: quota left (`remainingPercentage`) and the window's wall-clock time
+  left (`UsageLimitDisplay.timeRemainingPercentage`), both on the remaining
+  scale. The bar runs to the larger and splits where the smaller ends; the
+  usage segment is tinted by `Double.quotaTint`, the time segment is neutral.
+  Neutral-then-tinted = under pace (tinted tail is the cushion);
+  tinted-then-neutral = will run out before reset (neutral tail is the
+  shortfall). Colour only reinforces the percentage text; it is never the
+  sole channel — the time left is also in the tooltip and accessibility value.
+- Window length comes from the tier name (`QuotaWindowLength`); unknown length,
+  unknown reset, or a reset already passed → plain tinted fill rather than a
+  wrong split. Time left moves with the clock (one-minute `TimelineView`), not
+  with refreshes.
 - Keep updated time static until the next refresh.
 - Do not show auth implementation details in any user-facing string, happy path
   or error path. "Not signed in to Codex", not "No Codex OAuth credentials".
@@ -521,7 +532,7 @@ When adding future trackers, preserve:
 - 30-second auto refresh,
 - toolbar refresh fallback,
 - menu-bar refresh fallback,
-- native usage bars,
+- split quota/time bars,
 - compact menu-bar summary rows,
 - static updated timestamp,
 - credential isolation outside SwiftUI,
